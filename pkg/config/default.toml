@@ -1,0 +1,56 @@
+# ql - Quick Launch Default Configuration
+# Copy this to ~/. config/ql/config.toml to customize
+
+# Default launcher (if no flag specified)
+default_launcher = "rofi"
+
+# Launcher configurations
+[launchers.dmenu]
+command = "dmenu"
+args = ["-i", "-l", "20"]
+
+[launchers.rofi]
+command = "rofi"
+args = ["-dmenu", "-i"]
+
+[launchers.fzf]
+command = "fzf"
+args = ["--height", "40%", "--reverse", "--border"]
+
+[launchers.bemenu]
+command = "bemenu"
+args = ["-i", "-l", "20"]
+
+[launchers.fuzzel]
+command = "fuzzel"
+args = ["--dmenu"]
+
+# Command-specific settings
+[commands.power]
+enabled = true
+
+# Show options
+show_logout = true
+show_suspend = true
+show_hibernate = false
+show_reboot = true
+show_shutdown = true
+
+# Confirm options
+confirm_logout = true
+confirm_suspend = false
+confirm_hibernate = true
+confirm_reboot = true
+confirm_shutdown = true
+
+# Custom commands
+logout_command = "loginctl terminate-user $USER"
+suspend_command = "systemctl suspend"
+hibernate_command = "systemctl hibernate"
+reboot_command = "systemctl reboot"
+shutdown_command = "systemctl poweroff"
+
+[commands.screenshot]
+enabled = true
+save_dir = "~/Pictures/Screenshots"
+file_prefix = "screenshot"
