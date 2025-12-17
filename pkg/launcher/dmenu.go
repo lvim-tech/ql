@@ -1,82 +1,45 @@
 package launcher
 
 import (
-	"bytes"
 	"os/exec"
 	"strings"
-
-	"github.com/lvim-tech/ql/pkg/config"
 )
 
-func init() {
-	Register(&DmenuLauncher{})
+type Dmenu struct {
+	args []string
 }
 
-type DmenuLauncher struct {
-	command string
-	args    []string
+func NewDmenu(args []string) *Dmenu {
+	return &Dmenu{args: args}
 }
 
-func (d *DmenuLauncher) Name() string {
-	return "dmenu"
-}
+func (d *Dmenu) Show(options []string, prompt string) (string, error) {
+	args := append([]string{}, d.args...)
+	args = append(args, "-p", prompt)
 
-func (d *DmenuLauncher) Flag() string {
-	return "d"
-}
+	cmd := exec.Command("dmenu", args...)
+	cmd.Stdin = strings.NewReader(strings.Join(options, "\n"))
 
-func (d *DmenuLauncher) Description() string {
-	return "Use dmenu launcher"
-}
-
-func (d *DmenuLauncher) IsAvailable() bool {
-	if d.command != "" {
-		return commandExists(d.command)
-	}
-	return commandExists("dmenu")
-}
-
-func (d *DmenuLauncher) SetCommand(command string, args []string) {
-	d.command = command
-	d.args = args
-}
-
-func (d *DmenuLauncher) Show(options []string, prompt string) (string, error) {
-	input := strings.Join(options, "\n")
-
-	// Зареди от config
-	if d.command == "" {
-		cfg := config.Get()
-		launcherCmd := cfg.GetLauncherCommand("dmenu")
-		if launcherCmd != nil {
-			d.command = launcherCmd.Command
-			d.args = launcherCmd.Args
-		} else {
-			d.command = "dmenu"
-			d.args = []string{"-i", "-l", "20"}
-		}
-	}
-
-	// Построй командата
-	cmdArgs := append(d.args, "-p", prompt)
-	cmd := exec.Command(d.command, cmdArgs...)
-	cmd.Stdin = strings.NewReader(input)
-
-	var out bytes.Buffer
-	cmd.Stdout = &out
-
-	if err := cmd.Run(); err != nil {
-		// Exit status 1 обикновено означава ESC/Cancel
+	output, err := cmd.Output()
+	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			return "", ErrCancelled
 		}
 		return "", err
 	}
 
-	result := strings.TrimSpace(out.String())
+	result := strings.TrimSpace(string(output))
 	if result == "" {
 		return "", ErrCancelled
 	}
 
 	return result, nil
+}
+
+func (d *Dmenu) Name() string {
+	return "dmenu"
+}
+
+func (d *Dmenu) Args() []string {
+	return d.args
 }

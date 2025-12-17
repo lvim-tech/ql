@@ -4,11 +4,12 @@ package screenshot
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"time"
 
-	"github.com/lvim-tech/ql/internal/utils"
 	"github.com/lvim-tech/ql/pkg/commands"
 	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/launcher"
@@ -22,172 +23,240 @@ func init() {
 	})
 }
 
-// CaptureMode представлява тип screenshot
-type CaptureMode string
-
-const (
-	CaptureModeFullscreen CaptureMode = "Fullscreen"
-	CaptureModeWindow     CaptureMode = "Active window"
-	CaptureModeRegion     CaptureMode = "Selected region"
-	CaptureModeOutput     CaptureMode = "Current output"
-)
-
-// Destination представлява къде да се запази screenshot-а
-type Destination string
-
-const (
-	DestinationFile      Destination = "File"
-	DestinationClipboard Destination = "Clipboard"
-	DestinationBoth      Destination = "Both"
-)
-
-// Config за screenshot
-type Config struct {
-	SaveDir    string
-	FilePrefix string
-}
-
-// Run показва screenshot menu
 func Run(ctx *launcher.Context) error {
-	// Detect platform
-	platform := detectPlatform()
-	if platform == "" {
-		return fmt.Errorf("no screenshot tool found (install maim for X11 or grim/slurp for Wayland)")
-	}
-
-	// Load config
-	cfg := getScreenshotConfig()
-
-	// Ensure screenshot directory exists
-	if err := utils.EnsureDir(cfg.SaveDir); err != nil {
-		return fmt.Errorf("failed to create screenshot directory: %w", err)
-	}
-
-	// Select capture mode
-	modes := getCaptureModes(platform)
-	mode, err := selectCaptureMode(ctx, modes)
-	if err != nil {
-		return err
-	}
-
-	// Select delay
-	delay, err := selectDelay(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Select destination
-	dest, err := selectDestination(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Generate filename
-	filename := generateFilename(cfg, string(mode))
-
-	// Take screenshot
-	return takeScreenshot(platform, mode, delay, dest, filename)
-}
-
-// detectPlatform определя дали сме на X11 или Wayland
-func detectPlatform() string {
-	sessionType := utils.GetEnvOrDefault("XDG_SESSION_TYPE", "")
-
-	switch sessionType {
-	case "wayland":
-		if utils.CommandExists("grim") && utils.CommandExists("slurp") {
-			return "wayland"
-		}
-	case "x11":
-		if utils.CommandExists("maim") {
-			return "x11"
-		}
-	default:
-		// Fallback detection
-		if utils.CommandExists("grim") && utils.CommandExists("slurp") {
-			return "wayland"
-		}
-		if utils.CommandExists("maim") {
-			return "x11"
-		}
-	}
-
-	return ""
-}
-
-// getCaptureModes връща достъпните режими за платформата
-func getCaptureModes(platform string) []CaptureMode {
-	modes := []CaptureMode{
-		CaptureModeFullscreen,
-		CaptureModeWindow,
-		CaptureModeRegion,
-	}
-
-	// Wayland поддържа и Current output
-	if platform == "wayland" {
-		modes = append(modes, CaptureModeOutput)
-	}
-
-	return modes
-}
-
-// selectCaptureMode избира режим на screenshot
-func selectCaptureMode(ctx *launcher.Context, modes []CaptureMode) (CaptureMode, error) {
-	options := make([]string, len(modes))
-	for i, mode := range modes {
-		options[i] = string(mode)
-	}
-
-	choice, err := ctx.Show(options, "Take screenshot of:")
-	if err != nil {
-		return "", err
-	}
-
-	return CaptureMode(choice), nil
-}
-
-// selectDelay избира delay преди screenshot
-func selectDelay(ctx *launcher.Context) (int, error) {
-	options := []string{"0", "1", "2", "3", "4", "5"}
-	choice, err := ctx.Show(options, "Delay (in seconds):")
-	if err != nil {
-		return 0, err
-	}
-
-	return strconv.Atoi(choice)
-}
-
-// selectDestination избира къде да се запази screenshot-а
-func selectDestination(ctx *launcher.Context) (Destination, error) {
-	options := []string{
-		string(DestinationFile),
-		string(DestinationClipboard),
-		string(DestinationBoth),
-	}
-
-	choice, err := ctx.Show(options, "Destination:")
-	if err != nil {
-		return "", err
-	}
-
-	return Destination(choice), nil
-}
-
-// getScreenshotConfig връща screenshot конфигурация
-func getScreenshotConfig() Config {
 	cfg := config.Get()
+	screenshotCfg := cfg.Commands.Screenshot
 
-	return Config{
-		SaveDir:    utils.ExpandPath(cfg.Commands.Screenshot.SaveDir),
-		FilePrefix: cfg.Commands.Screenshot.FilePrefix,
+	// Провери дали е enabled
+	if !screenshotCfg.Enabled {
+		return fmt.Errorf("screenshot module is disabled in config")
 	}
+
+	// Detect session type
+	sessionType := detectSessionType()
+
+	// Създай опции
+	options := []string{
+		"Fullscreen",
+		"Active Window",
+		"Selected Region",
+	}
+
+	if sessionType == "wayland" {
+		options = append(options, "Current Output")
+	}
+
+	// Покажи меню
+	mode, err := ctx.Show(options, "Screenshot Mode")
+	if err != nil {
+		return err
+	}
+
+	// Избери destination
+	destOptions := []string{
+		"Save to File",
+		"Copy to Clipboard",
+		"Both",
+	}
+
+	destination, err := ctx.Show(destOptions, "Destination")
+	if err != nil {
+		return err
+	}
+
+	// Вземи screenshot
+	return takeScreenshot(mode, destination, sessionType, &screenshotCfg)
 }
 
-// generateFilename генерира име на файл
-func generateFilename(cfg Config, fileType string) string {
-	// Replace spaces with dashes
-	fileType = strings.ReplaceAll(strings.ToLower(fileType), " ", "-")
-	timestamp := utils.GetTimestamp()
-	filename := fmt.Sprintf("%s-%s-%s.png", cfg.FilePrefix, fileType, timestamp)
-	return filepath.Join(cfg.SaveDir, filename)
+func detectSessionType() string {
+	if os.Getenv("WAYLAND_DISPLAY") != "" {
+		return "wayland"
+	}
+	return "x11"
+}
+
+func takeScreenshot(mode, destination, sessionType string, cfg *config.ScreenshotConfig) error {
+	// Expand save dir
+	saveDir := os.ExpandEnv(cfg.SaveDir)
+	if strings.HasPrefix(saveDir, "~/") {
+		home, _ := os.UserHomeDir()
+		saveDir = filepath.Join(home, saveDir[2:])
+	}
+
+	// Създай директорията ако не съществува
+	if err := os.MkdirAll(saveDir, 0755); err != nil {
+		return fmt.Errorf("failed to create save directory: %w", err)
+	}
+
+	// Генерирай filename
+	timestamp := time.Now().Format("20060102_150405")
+	filename := filepath.Join(saveDir, fmt.Sprintf("%s_%s.png", cfg.FilePrefix, timestamp))
+
+	// Вземи screenshot
+	var err error
+	if sessionType == "wayland" {
+		err = takeWaylandScreenshot(mode, destination, filename)
+	} else {
+		err = takeX11Screenshot(mode, destination, filename)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	// Notification
+	notify(fmt.Sprintf("Screenshot saved: %s", filepath.Base(filename)))
+	return nil
+}
+
+func takeWaylandScreenshot(mode, destination, filename string) error {
+	var grimArgs []string
+
+	switch mode {
+	case "Fullscreen":
+		grimArgs = []string{}
+	case "Active Window":
+		// Get active window geometry
+		geometry, err := getWaylandActiveWindowGeometry()
+		if err != nil {
+			return err
+		}
+		grimArgs = []string{"-g", geometry}
+	case "Selected Region":
+		// Use slurp for region selection
+		slurpCmd := exec.Command("slurp")
+		output, err := slurpCmd.Output()
+		if err != nil {
+			return fmt.Errorf("slurp failed: %w", err)
+		}
+		geometry := strings.TrimSpace(string(output))
+		grimArgs = []string{"-g", geometry}
+	case "Current Output":
+		// Get current output
+		output, err := getCurrentWaylandOutput()
+		if err != nil {
+			return err
+		}
+		grimArgs = []string{"-o", output}
+	}
+
+	// Execute based on destination
+	if strings.Contains(destination, "Save") || destination == "Both" {
+		args := append(grimArgs, filename)
+		cmd := exec.Command("grim", args...)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("grim failed: %w", err)
+		}
+	}
+
+	if strings.Contains(destination, "Clipboard") || destination == "Both" {
+		args := append(grimArgs, "-")
+		grimCmd := exec.Command("grim", args...)
+		wlCopyCmd := exec.Command("wl-copy")
+
+		pipe, err := grimCmd.StdoutPipe()
+		if err != nil {
+			return err
+		}
+		wlCopyCmd.Stdin = pipe
+
+		if err := grimCmd.Start(); err != nil {
+			return err
+		}
+		if err := wlCopyCmd.Start(); err != nil {
+			return err
+		}
+		if err := grimCmd.Wait(); err != nil {
+			return err
+		}
+		if err := wlCopyCmd.Wait(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func takeX11Screenshot(mode, destination, filename string) error {
+	var maimArgs []string
+
+	switch mode {
+	case "Fullscreen":
+		maimArgs = []string{}
+	case "Active Window":
+		activeWindow, err := exec.Command("xdotool", "getactivewindow").Output()
+		if err != nil {
+			return fmt.Errorf("failed to get active window: %w", err)
+		}
+		maimArgs = []string{"-i", strings.TrimSpace(string(activeWindow))}
+	case "Selected Region":
+		maimArgs = []string{"-s"}
+	}
+
+	// Execute based on destination
+	if strings.Contains(destination, "Save") || destination == "Both" {
+		args := append(maimArgs, filename)
+		cmd := exec.Command("maim", args...)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("maim failed: %w", err)
+		}
+	}
+
+	if strings.Contains(destination, "Clipboard") || destination == "Both" {
+		maimCmd := exec.Command("maim", maimArgs...)
+		xclipCmd := exec.Command("xclip", "-selection", "clipboard", "-t", "image/png")
+
+		pipe, err := maimCmd.StdoutPipe()
+		if err != nil {
+			return err
+		}
+		xclipCmd.Stdin = pipe
+
+		if err := maimCmd.Start(); err != nil {
+			return err
+		}
+		if err := xclipCmd.Start(); err != nil {
+			return err
+		}
+		if err := maimCmd.Wait(); err != nil {
+			return err
+		}
+		if err := xclipCmd.Wait(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func getWaylandActiveWindowGeometry() (string, error) {
+	// Sway example
+	cmd := exec.Command("swaymsg", "-t", "get_tree")
+	_, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("swaymsg failed: %w", err)
+	}
+
+	// Parse JSON to find focused window
+	// TODO: Implement proper JSON parsing with jq or encoding/json
+	return "", fmt.Errorf("active window detection not yet implemented for wayland")
+}
+
+func getCurrentWaylandOutput() (string, error) {
+	// Sway example
+	cmd := exec.Command("swaymsg", "-t", "get_outputs")
+	_, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("swaymsg failed: %w", err)
+	}
+
+	// Parse JSON to find focused output
+	// TODO: Implement proper JSON parsing
+	return "", fmt.Errorf("output detection not yet implemented")
+}
+
+func notify(message string) {
+	if _, err := exec.LookPath("notify-send"); err == nil {
+		exec.Command("notify-send", "ql screenshot", message).Run()
+	}
 }

@@ -1,3 +1,6 @@
+// Package display provides utilities for detecting the current display server type (X11 or Wayland).
+// It checks environment variables to determine which display server is running and provides
+// helper methods for type checking and information retrieval.
 package display
 
 import (
