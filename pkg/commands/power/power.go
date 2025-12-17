@@ -4,6 +4,7 @@ package power
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 
 	"github.com/lvim-tech/ql/pkg/commands"
@@ -18,14 +19,9 @@ func init() {
 	})
 }
 
-func Run(ctx commands.LauncherContext) error {
-	// Извличаме config директно
+func Run(ctx commands.LauncherContext) commands.CommandResult {
 	cfgInterface := ctx.Config().GetPowerConfig()
-	if cfgInterface == nil {
-		return fmt.Errorf("power config not found")
-	}
 
-	// Decode с WeaklyTypedInput
 	var cfg Config
 	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		WeaklyTypedInput: true,
@@ -33,84 +29,131 @@ func Run(ctx commands.LauncherContext) error {
 	})
 	if err != nil {
 		cfg = DefaultConfig()
-	} else if err := decoder.Decode(cfgInterface); err != nil {
-		cfg = DefaultConfig()
+	} else {
+		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
+			cfg = DefaultConfig()
+		}
 	}
 
 	if !cfg.Enabled {
-		return fmt.Errorf("power module is disabled in config")
-	}
-
-	// Build menu options
-	var options []string
-	actionMap := make(map[string]func() error)
-
-	if cfg.ShowLogout {
-		options = append(options, "Logout")
-		actionMap["Logout"] = func() error {
-			return executeWithConfirmation(ctx, "Logout", cfg.LogoutCommand, cfg.ConfirmLogout)
+		return commands.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("power module is disabled in config"),
 		}
 	}
 
-	if cfg.ShowSuspend {
-		options = append(options, "Suspend")
-		actionMap["Suspend"] = func() error {
-			return executeWithConfirmation(ctx, "Suspend", cfg.SuspendCommand, cfg.ConfirmSuspend)
+	for {
+		var options []string
+		actionMap := make(map[string]func() error)
+
+		options = append(options, "← Back")
+
+		if cfg.ShowLogout {
+			options = append(options, "Logout")
+			actionMap["Logout"] = func() error {
+				return executeWithConfirmation(ctx, "Logout", cfg.LogoutCommand, cfg.ConfirmLogout)
+			}
 		}
-	}
 
-	if cfg.ShowHibernate {
-		options = append(options, "Hibernate")
-		actionMap["Hibernate"] = func() error {
-			return executeWithConfirmation(ctx, "Hibernate", cfg.HibernateCommand, cfg.ConfirmHibernate)
+		if cfg.ShowSuspend {
+			options = append(options, "Suspend")
+			actionMap["Suspend"] = func() error {
+				return executeWithConfirmation(ctx, "Suspend", cfg.SuspendCommand, cfg.ConfirmSuspend)
+			}
 		}
-	}
 
-	if cfg.ShowReboot {
-		options = append(options, "Reboot")
-		actionMap["Reboot"] = func() error {
-			return executeWithConfirmation(ctx, "Reboot", cfg.RebootCommand, cfg.ConfirmReboot)
+		if cfg.ShowHibernate {
+			options = append(options, "Hibernate")
+			actionMap["Hibernate"] = func() error {
+				return executeWithConfirmation(ctx, "Hibernate", cfg.HibernateCommand, cfg.ConfirmHibernate)
+			}
 		}
-	}
 
-	if cfg.ShowShutdown {
-		options = append(options, "Shutdown")
-		actionMap["Shutdown"] = func() error {
-			return executeWithConfirmation(ctx, "Shutdown", cfg.ShutdownCommand, cfg.ConfirmShutdown)
+		if cfg.ShowReboot {
+			options = append(options, "Reboot")
+			actionMap["Reboot"] = func() error {
+				return executeWithConfirmation(ctx, "Reboot", cfg.RebootCommand, cfg.ConfirmReboot)
+			}
 		}
-	}
 
-	if len(options) == 0 {
-		return fmt.Errorf("no power options enabled")
-	}
+		if cfg.ShowShutdown {
+			options = append(options, "Shutdown")
+			actionMap["Shutdown"] = func() error {
+				return executeWithConfirmation(ctx, "Shutdown", cfg.ShutdownCommand, cfg.ConfirmShutdown)
+			}
+		}
 
-	// Show menu
-	choice, err := ctx.Show(options, "Power")
-	if err != nil {
-		return err
-	}
+		if len(options) == 1 {
+			return commands.CommandResult{
+				Success: false,
+				Error:   fmt.Errorf("no power options enabled"),
+			}
+		}
 
-	// Execute action
-	action, ok := actionMap[choice]
-	if !ok {
-		return fmt.Errorf("unknown action: %s", choice)
-	}
+		choice, err := ctx.Show(options, "Power")
+		if err != nil {
+			return commands.CommandResult{Success: false}
+		}
 
-	return action()
+		if choice == "← Back" {
+			return commands.CommandResult{Success: false}
+		}
+
+		action, ok := actionMap[choice]
+		if !ok {
+			showErrorNotification("Power Error", fmt.Sprintf("Unknown action: %s", choice))
+			continue
+		}
+
+		err = action()
+		if err != nil {
+			showErrorNotification("Power Error", err.Error())
+			continue
+		}
+
+		return commands.CommandResult{Success: true}
+	}
 }
 
 func executeWithConfirmation(ctx commands.LauncherContext, action, command string, needsConfirm bool) error {
 	if needsConfirm {
-		confirmOptions := []string{"Yes", "No"}
+		confirmOptions := []string{"← Back", "Yes", "No"}
 		choice, err := ctx.Show(confirmOptions, fmt.Sprintf("Confirm %s?", action))
 		if err != nil {
-			return err
+			return fmt.Errorf("cancelled")
+		}
+		if choice == "← Back" || choice == "No" {
+			return fmt.Errorf("cancelled")
 		}
 		if choice != "Yes" {
-			return fmt.Errorf("action cancelled")
+			return fmt.Errorf("cancelled")
 		}
 	}
 
 	cmd := exec.Command("sh", "-c", command)
 	return cmd.Run()
+}
+
+func showErrorNotification(title, message string) {
+	if _, err := exec.LookPath("dunstify"); err == nil {
+		cmd := exec.Command("dunstify",
+			"-u", "critical",
+			"-t", "10000",
+			title,
+			message)
+		cmd.Env = os.Environ()
+		cmd.Start()
+		return
+	}
+
+	if _, err := exec.LookPath("notify-send"); err == nil {
+		cmd := exec.Command("notify-send",
+			"-u", "critical",
+			"-t", "10000",
+			title,
+			message)
+		cmd.Env = os.Environ()
+		cmd.Start()
+		return
+	}
 }

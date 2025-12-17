@@ -20,14 +20,9 @@ func init() {
 	})
 }
 
-func Run(ctx commands.LauncherContext) error {
-	// Извличаме config директно
+func Run(ctx commands.LauncherContext) commands.CommandResult {
 	cfgInterface := ctx.Config().GetRadioConfig()
-	if cfgInterface == nil {
-		return fmt.Errorf("radio config not found")
-	}
 
-	// Decode с WeaklyTypedInput
 	var cfg Config
 	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		WeaklyTypedInput: true,
@@ -35,39 +30,59 @@ func Run(ctx commands.LauncherContext) error {
 	})
 	if err != nil {
 		cfg = DefaultConfig()
-	} else if err := decoder.Decode(cfgInterface); err != nil {
-		cfg = DefaultConfig()
+	} else {
+		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
+			cfg = DefaultConfig()
+		}
 	}
 
 	if !cfg.Enabled {
-		return fmt.Errorf("radio module is disabled in config")
+		return commands.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("radio module is disabled in config"),
+		}
 	}
 
-	// Check if mpv is installed
 	if _, err := exec.LookPath("mpv"); err != nil {
-		return fmt.Errorf("mpv is not installed")
+		return commands.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("mpv is not installed"),
+		}
 	}
 
-	// Menu options
-	options := []string{"Play Station", "Stop Radio"}
+	for {
+		options := []string{"← Back", "Play Station", "Stop Radio"}
 
-	choice, err := ctx.Show(options, "Radio")
-	if err != nil {
-		return err
-	}
+		choice, err := ctx.Show(options, "Radio")
+		if err != nil {
+			return commands.CommandResult{Success: false}
+		}
 
-	switch choice {
-	case "Play Station":
-		return playStation(ctx, &cfg)
-	case "Stop Radio":
-		return stopRadio()
-	default:
-		return fmt.Errorf("unknown choice: %s", choice)
+		if choice == "← Back" {
+			return commands.CommandResult{Success: false}
+		}
+
+		var actionErr error
+		switch choice {
+		case "Play Station":
+			actionErr = playStation(ctx, &cfg)
+		case "Stop Radio":
+			actionErr = stopRadio()
+		default:
+			showErrorNotification("Radio Error", fmt.Sprintf("Unknown choice: %s", choice))
+			continue
+		}
+
+		if actionErr != nil {
+			showErrorNotification("Radio Error", actionErr.Error())
+			continue
+		}
+
+		return commands.CommandResult{Success: true}
 	}
 }
 
 func playStation(ctx commands.LauncherContext, cfg *Config) error {
-	// Build station list
 	var stations []string
 	stationMap := make(map[string]string)
 
@@ -80,10 +95,15 @@ func playStation(ctx commands.LauncherContext, cfg *Config) error {
 		return fmt.Errorf("no radio stations configured")
 	}
 
-	// Show station menu
+	stations = append([]string{"← Back"}, stations...)
+
 	choice, err := ctx.Show(stations, "Select Station")
 	if err != nil {
-		return err
+		return fmt.Errorf("cancelled")
+	}
+
+	if choice == "← Back" {
+		return fmt.Errorf("cancelled")
 	}
 
 	url, ok := stationMap[choice]
@@ -91,17 +111,14 @@ func playStation(ctx commands.LauncherContext, cfg *Config) error {
 		return fmt.Errorf("station not found: %s", choice)
 	}
 
-	// Stop any existing radio
 	stopRadio()
 
-	// Start mpv in background
 	cmd := exec.Command("mpv",
 		"--no-video",
 		fmt.Sprintf("--volume=%d", cfg.Volume),
 		url,
 	)
 
-	// Detach process
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
@@ -114,8 +131,7 @@ func playStation(ctx commands.LauncherContext, cfg *Config) error {
 		return fmt.Errorf("failed to start radio:  %w", err)
 	}
 
-	// Save PID
-	pidFile := "/tmp/ql_radio. pid"
+	pidFile := "/tmp/ql_radio.pid"
 	pidData := fmt.Sprintf("%d", cmd.Process.Pid)
 	if err := os.WriteFile(pidFile, []byte(pidData), 0644); err != nil {
 		cmd.Process.Kill()
@@ -134,7 +150,7 @@ func stopRadio() error {
 
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
-		return nil // No radio running
+		return nil
 	}
 
 	var pid int
@@ -160,5 +176,29 @@ func stopRadio() error {
 func notify(title, message string) {
 	if _, err := exec.LookPath("notify-send"); err == nil {
 		exec.Command("notify-send", "ql radio", fmt.Sprintf("%s\n%s", title, message)).Run()
+	}
+}
+
+func showErrorNotification(title, message string) {
+	if _, err := exec.LookPath("dunstify"); err == nil {
+		cmd := exec.Command("dunstify",
+			"-u", "critical",
+			"-t", "10000",
+			title,
+			message)
+		cmd.Env = os.Environ()
+		cmd.Start()
+		return
+	}
+
+	if _, err := exec.LookPath("notify-send"); err == nil {
+		cmd := exec.Command("notify-send",
+			"-u", "critical",
+			"-t", "10000",
+			title,
+			message)
+		cmd.Env = os.Environ()
+		cmd.Start()
+		return
 	}
 }
