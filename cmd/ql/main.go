@@ -5,10 +5,6 @@ import (
 	"os"
 
 	"github.com/lvim-tech/ql/pkg/commands"
-	"github.com/lvim-tech/ql/pkg/config"
-	"github.com/lvim-tech/ql/pkg/launcher"
-
-	// Import commands
 	_ "github.com/lvim-tech/ql/pkg/commands/audiorecord"
 	_ "github.com/lvim-tech/ql/pkg/commands/mpc"
 	_ "github.com/lvim-tech/ql/pkg/commands/power"
@@ -16,181 +12,253 @@ import (
 	_ "github.com/lvim-tech/ql/pkg/commands/screenshot"
 	_ "github.com/lvim-tech/ql/pkg/commands/videorecord"
 	_ "github.com/lvim-tech/ql/pkg/commands/wifi"
+	"github.com/lvim-tech/ql/pkg/config"
+	"github.com/lvim-tech/ql/pkg/launcher"
 )
 
 func main() {
-	// Load config
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Check for subcommands
-	if len(os.Args) > 1 {
-		cmdName := os.Args[1]
-
-		// Handle special commands
-		switch cmdName {
-		case "version":
-			fmt.Println("ql version 0.1.0")
-			return
-		case "help", "-h", "--help":
-			showHelp()
-			return
-		case "init":
-			if err := config.InitUserConfig(); err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
-			fmt.Println("Config initialized at:", config.GetUserConfigPath())
-			return
-		}
-
-		// Check if command is enabled in config
-		if !isCommandEnabled(cmdName, cfg) {
-			fmt.Fprintf(os.Stderr, "Error: %s module is disabled in config\n", cmdName)
-			os.Exit(1)
-		}
-
-		// Try to run the command
-		cmd := commands.Find(cmdName)
-		if cmd == nil {
-			fmt.Fprintf(os.Stderr, "Unknown command: %s\n", cmdName)
-			fmt.Fprintf(os.Stderr, "Run 'ql help' for usage\n")
-			os.Exit(1)
-		}
-
-		// Parse flags (simple implementation)
-		flags := parseFlags(os.Args[2:])
-
-		// Create launcher context
-		ctx := launcher.NewContextFromFlags(flags)
-
-		// Run command
-		if err := cmd.Run(ctx); err != nil {
-			if launcher.IsCancelled(err) {
-				os.Exit(0)
-			}
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	// No subcommand - show main menu
-	showMainMenu(cfg)
-}
-
-// isCommandEnabled checks if a command is enabled in config
-func isCommandEnabled(cmdName string, cfg *config.Config) bool {
-	switch cmdName {
-	case "power":
-		return cfg.Commands.Power.Enabled
-	case "screenshot":
-		return cfg.Commands.Screenshot.Enabled
-	case "radio":
-		return cfg.Commands.Radio.Enabled
-	case "wifi":
-		return cfg.Commands.Wifi.Enabled
-	case "mpc":
-		return cfg.Commands.Mpc.Enabled
-	default:
-		return true // Unknown commands are allowed (will fail later)
-	}
-}
-
-func showMainMenu(cfg *config.Config) {
-	// Get all registered commands
-	allCommands := commands.List()
-
-	// Filter enabled commands
-	var enabledCommands []string
-	var enabledCommandNames []string
-	for _, cmd := range allCommands {
-		if isCommandEnabled(cmd.Name, cfg) {
-			enabledCommands = append(enabledCommands, cmd.Description)
-			enabledCommandNames = append(enabledCommandNames, cmd.Name)
-		}
-	}
-
-	if len(enabledCommands) == 0 {
-		fmt.Fprintf(os.Stderr, "No commands enabled in config\n")
-		os.Exit(1)
-	}
-
-	// Create launcher context
-	flags := parseFlags(os.Args[1:])
-	ctx := launcher.NewContextFromFlags(flags)
-
-	// Show menu
-	choice, err := ctx.Show(enabledCommands, "ql")
-	if err != nil {
-		if launcher.IsCancelled(err) {
-			os.Exit(0)
-		}
+	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
 
-	// Find and run the selected command
-	for i, desc := range enabledCommands {
-		if desc == choice {
-			cmdName := enabledCommandNames[i]
-			cmd := commands.Find(cmdName)
-			if cmd == nil {
-				fmt.Fprintf(os.Stderr, "Command not found: %s\n", cmdName)
-				os.Exit(1)
-			}
-
-			if err := cmd.Run(ctx); err != nil {
-				if launcher.IsCancelled(err) {
-					os.Exit(0)
-				}
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
-			return
+func run() error {
+	// Handle special commands
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "init":
+			return handleInit()
+		case "version":
+			fmt.Println("ql version 0.1.0")
+			return nil
+		case "help":
+			printHelp()
+			return nil
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "Command not found\n")
-	os.Exit(1)
+	// Load config
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Determine launcher name
+	launcherName := cfg.GetDefaultLauncher()
+	if len(os.Args) > 1 {
+		arg := os.Args[1]
+		if arg != "init" && arg != "version" && arg != "help" {
+			launcherName = arg
+		}
+	}
+
+	// Create launcher context
+	ctx, err := launcher.New(launcherName, cfg)
+	if err != nil {
+		return fmt.Errorf("failed to create launcher:  %w", err)
+	}
+
+	// Get menu style
+	menuStyle := cfg.GetMenuStyle()
+
+	if menuStyle == "grouped" {
+		return runGroupedMenu(ctx, cfg)
+	}
+
+	return runFlatMenu(ctx, cfg)
 }
 
-func showHelp() {
-	fmt.Println("ql - Quick Launcher for Linux")
+func runFlatMenu(ctx launcher.Launcher, cfg *config.Config) error {
+	// Get all registered commands
+	registeredCommands := commands.GetAll()
+	if len(registeredCommands) == 0 {
+		return fmt.Errorf("no commands registered")
+	}
+
+	// Create command map
+	commandMap := make(map[string]commands.Command)
+	for _, cmd := range registeredCommands {
+		commandMap[cmd.Name] = cmd
+	}
+
+	// Get module order
+	moduleOrder := cfg.GetModuleOrder()
+	if len(moduleOrder) == 0 {
+		// Fallback to all registered commands
+		for _, cmd := range registeredCommands {
+			moduleOrder = append(moduleOrder, cmd.Name)
+		}
+	}
+
+	// Build options in specified order
+	var options []string
+	optionToCommand := make(map[string]commands.Command)
+
+	for _, moduleName := range moduleOrder {
+		cmd, exists := commandMap[moduleName]
+		if !exists {
+			continue
+		}
+
+		// Check if enabled
+		if !isCommandEnabled(cfg, cmd.Name) {
+			continue
+		}
+
+		options = append(options, cmd.Description)
+		optionToCommand[cmd.Description] = cmd
+	}
+
+	if len(options) == 0 {
+		return fmt.Errorf("no enabled commands")
+	}
+
+	// Show menu
+	choice, err := ctx.Show(options, "ql")
+	if err != nil {
+		return err
+	}
+
+	// Execute selected command
+	cmd, ok := optionToCommand[choice]
+	if !ok {
+		return fmt.Errorf("unknown command: %s", choice)
+	}
+
+	return cmd.Run(ctx)
+}
+
+func runGroupedMenu(ctx launcher.Launcher, cfg *config.Config) error {
+	// Get all registered commands
+	registeredCommands := commands.GetAll()
+	if len(registeredCommands) == 0 {
+		return fmt.Errorf("no commands registered")
+	}
+
+	// Create command map
+	commandMap := make(map[string]commands.Command)
+	for _, cmd := range registeredCommands {
+		commandMap[cmd.Name] = cmd
+	}
+
+	// Get module groups
+	groups := cfg.GetModuleGroups()
+	if len(groups) == 0 {
+		// Fallback to flat menu
+		return runFlatMenu(ctx, cfg)
+	}
+
+	// Build group options
+	var groupOptions []string
+	groupMap := make(map[string]config.ModuleGroup)
+
+	for _, group := range groups {
+		// Check if group has any enabled modules
+		hasEnabled := false
+		for _, moduleName := range group.Modules {
+			if isCommandEnabled(cfg, moduleName) {
+				hasEnabled = true
+				break
+			}
+		}
+
+		if hasEnabled {
+			label := fmt.Sprintf("%s %s", group.Icon, group.Name)
+			groupOptions = append(groupOptions, label)
+			groupMap[label] = group
+		}
+	}
+
+	if len(groupOptions) == 0 {
+		return fmt.Errorf("no enabled command groups")
+	}
+
+	// Show group menu
+	groupChoice, err := ctx.Show(groupOptions, "ql")
+	if err != nil {
+		return err
+	}
+
+	selectedGroup := groupMap[groupChoice]
+
+	// Build module options for selected group
+	var moduleOptions []string
+	moduleToCommand := make(map[string]commands.Command)
+
+	for _, moduleName := range selectedGroup.Modules {
+		cmd, exists := commandMap[moduleName]
+		if !exists {
+			continue
+		}
+
+		if !isCommandEnabled(cfg, cmd.Name) {
+			continue
+		}
+
+		moduleOptions = append(moduleOptions, cmd.Description)
+		moduleToCommand[cmd.Description] = cmd
+	}
+
+	if len(moduleOptions) == 0 {
+		return fmt.Errorf("no enabled commands in group")
+	}
+
+	// Show module menu
+	moduleChoice, err := ctx.Show(moduleOptions, selectedGroup.Name)
+	if err != nil {
+		return err
+	}
+
+	// Execute selected command
+	cmd, ok := moduleToCommand[moduleChoice]
+	if !ok {
+		return fmt.Errorf("unknown command: %s", moduleChoice)
+	}
+
+	return cmd.Run(ctx)
+}
+
+// isCommandEnabled checks if a module is enabled in config
+func isCommandEnabled(cfg *config.Config, cmdName string) bool {
+	commandCfg, exists := cfg.Commands[cmdName]
+	if !exists {
+		return true
+	}
+
+	if enabledVal, ok := commandCfg["enabled"]; ok {
+		if enabled, ok := enabledVal.(bool); ok {
+			return enabled
+		}
+	}
+
+	return true
+}
+
+func handleInit() error {
+	if err := config.InitUserConfig(); err != nil {
+		return err
+	}
+
+	configPath := config.GetUserConfigPath()
+	fmt.Printf("Config initialized at: %s\n", configPath)
+	fmt.Println("\nYou can now edit the config file to customize ql.")
+	fmt.Println("Run 'ql' to start using it!")
+
+	return nil
+}
+
+func printHelp() {
+	fmt.Println("ql - Quick Launcher")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  ql [command] [flags]")
+	fmt.Println("  ql [launcher]    - Run ql with specified launcher (default: rofi)")
+	fmt.Println("  ql init          - Initialize user config (~/.config/ql/config. toml)")
+	fmt.Println("  ql version       - Show version information")
+	fmt.Println("  ql help          - Show this help message")
 	fmt.Println()
-	fmt.Println("Available Commands:")
-
-	for _, cmd := range commands.List() {
-		fmt.Printf("  %-12s %s\n", cmd.Name, cmd.Description)
-	}
-
+	fmt.Println("Available launchers:")
+	fmt.Println("  rofi, dmenu, fzf, bemenu, fuzzel")
 	fmt.Println()
-	fmt.Println("Special Commands:")
-	fmt.Println("  version      Show version")
-	fmt.Println("  help         Show this help")
-	fmt.Println("  init         Initialize user config")
-	fmt.Println()
-	fmt.Println("Flags:")
-	fmt.Println("  -r           Use rofi launcher")
-	fmt.Println("  -d           Use dmenu launcher")
-	fmt.Println("  -f           Use fzf launcher")
-	fmt.Println("  -b           Use bemenu launcher")
-	fmt.Println("  -z           Use fuzzel launcher")
-}
-
-func parseFlags(args []string) map[string]bool {
-	flags := make(map[string]bool)
-	for _, arg := range args {
-		if len(arg) > 1 && arg[0] == '-' {
-			flag := arg[1:]
-			flags[flag] = true
-		}
-	}
-	return flags
+	fmt.Println("Config file: ~/.config/ql/config.toml")
 }

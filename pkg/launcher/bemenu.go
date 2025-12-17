@@ -1,45 +1,66 @@
 package launcher
 
 import (
+	"bufio"
+	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/lvim-tech/ql/pkg/config"
 )
 
 type Bemenu struct {
-	args []string
+	config *config.Config
 }
 
-func NewBemenu(args []string) *Bemenu {
-	return &Bemenu{args: args}
+func NewBemenu(cfg *config.Config) *Bemenu {
+	return &Bemenu{config: cfg}
 }
 
 func (b *Bemenu) Show(options []string, prompt string) (string, error) {
-	args := append([]string{}, b.args...)
-	args = append(args, "-p", prompt)
+	launcherCfg := b.config.GetLauncherConfig("bemenu")
+	args := append(launcherCfg.Args, "-p", prompt)
 
 	cmd := exec.Command("bemenu", args...)
-	cmd.Stdin = strings.NewReader(strings.Join(options, "\n"))
 
-	output, err := cmd.Output()
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return "", ErrCancelled
-		}
-		return "", err
+		return "", fmt.Errorf("failed to create stdin pipe: %w", err)
 	}
 
-	result := strings.TrimSpace(string(output))
-	if result == "" {
-		return "", ErrCancelled
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to create stdout pipe:  %w", err)
 	}
 
-	return result, nil
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("failed to start bemenu: %w", err)
+	}
+
+	// Write options to stdin
+	for _, option := range options {
+		fmt.Fprintln(stdin, option)
+	}
+	stdin.Close()
+
+	// Read selection
+	scanner := bufio.NewScanner(stdout)
+	var choice string
+	if scanner.Scan() {
+		choice = strings.TrimSpace(scanner.Text())
+	}
+
+	if err := cmd.Wait(); err != nil {
+		return "", fmt.Errorf("bemenu exited with error: %w", err)
+	}
+
+	if choice == "" {
+		return "", fmt.Errorf("no selection made")
+	}
+
+	return choice, nil
 }
 
-func (b *Bemenu) Name() string {
-	return "bemenu"
-}
-
-func (b *Bemenu) Args() []string {
-	return b.args
+func (b *Bemenu) Config() *config.Config {
+	return b.config
 }

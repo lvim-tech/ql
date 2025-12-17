@@ -12,8 +12,7 @@ import (
 	"time"
 
 	"github.com/lvim-tech/ql/pkg/commands"
-	"github.com/lvim-tech/ql/pkg/config"
-	"github.com/lvim-tech/ql/pkg/launcher"
+	"github.com/mitchellh/mapstructure"
 )
 
 func init() {
@@ -24,12 +23,27 @@ func init() {
 	})
 }
 
-func Run(ctx *launcher.Context) error {
-	cfg := config.Get()
-	videoCfg := cfg.Commands.VideoRecord
+func Run(ctx commands.LauncherContext) error {
+	// Извличаме config директно
+	cfgInterface := ctx.Config().GetVideoRecordConfig()
+	if cfgInterface == nil {
+		return fmt.Errorf("videorecord config not found")
+	}
+
+	// Decode с WeaklyTypedInput
+	var cfg Config
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		WeaklyTypedInput: true,
+		Result:           &cfg,
+	})
+	if err != nil {
+		cfg = DefaultConfig()
+	} else if err := decoder.Decode(cfgInterface); err != nil {
+		cfg = DefaultConfig()
+	}
 
 	// Провери дали е enabled
-	if !videoCfg.Enabled {
+	if !cfg.Enabled {
 		return fmt.Errorf("videorecord module is disabled in config")
 	}
 
@@ -46,16 +60,16 @@ func Run(ctx *launcher.Context) error {
 
 	switch choice {
 	case "Start Recording":
-		return startRecording(ctx, &videoCfg)
+		return startRecording(ctx, &cfg)
 	case "Stop Recording":
-		return stopRecording(&videoCfg)
+		return stopRecording(&cfg)
 	default:
 		return fmt.Errorf("unknown choice: %s", choice)
 	}
 }
 
 // startRecording започва video запис
-func startRecording(ctx *launcher.Context, cfg *config.VideoRecordConfig) error {
+func startRecording(ctx commands.LauncherContext, cfg *Config) error {
 	// Expand save dir
 	saveDir := cfg.SaveDir
 	if len(saveDir) >= 2 && saveDir[:2] == "~/" {
@@ -64,7 +78,7 @@ func startRecording(ctx *launcher.Context, cfg *config.VideoRecordConfig) error 
 
 	// Създай директорията ако не съществува
 	if err := os.MkdirAll(saveDir, 0755); err != nil {
-		return fmt.Errorf("failed to create save directory: %w", err)
+		return fmt.Errorf("failed to create save directory:  %w", err)
 	}
 
 	// Генерирай име на файл
@@ -113,10 +127,10 @@ func startRecording(ctx *launcher.Context, cfg *config.VideoRecordConfig) error 
 	}
 
 	// Запиши PID в temp файл
-	pidFile := "/tmp/ql_videorecord. pid"
+	pidFile := "/tmp/ql_videorecord.pid"
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start recording:  %w", err)
+		return fmt.Errorf("failed to start recording: %w", err)
 	}
 
 	// Запиши PID и output path
@@ -137,7 +151,7 @@ func startRecording(ctx *launcher.Context, cfg *config.VideoRecordConfig) error 
 }
 
 // buildWaylandCommand build wf-recorder command
-func buildWaylandCommand(region, outputPath string, cfg *config.VideoRecordConfig) (*exec.Cmd, error) {
+func buildWaylandCommand(region, outputPath string, cfg *Config) (*exec.Cmd, error) {
 	if _, err := exec.LookPath("wf-recorder"); err != nil {
 		return nil, fmt.Errorf("wf-recorder is not installed (required for Wayland)")
 	}
@@ -188,7 +202,7 @@ func buildWaylandCommand(region, outputPath string, cfg *config.VideoRecordConfi
 }
 
 // buildX11Command build ffmpeg command for X11
-func buildX11Command(region, outputPath string, cfg *config.VideoRecordConfig) (*exec.Cmd, error) {
+func buildX11Command(region, outputPath string, cfg *Config) (*exec.Cmd, error) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return nil, fmt.Errorf("ffmpeg is not installed")
 	}
@@ -333,7 +347,7 @@ func getActiveWindowGeometry() (string, string, error) {
 }
 
 // stopRecording спира video запис
-func stopRecording(cfg *config.VideoRecordConfig) error {
+func stopRecording(cfg *Config) error {
 	pidFile := "/tmp/ql_videorecord.pid"
 
 	data, err := os.ReadFile(pidFile)

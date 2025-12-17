@@ -4,53 +4,53 @@ package radio
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
-	"sort"
+	"syscall"
 
 	"github.com/lvim-tech/ql/pkg/commands"
-	"github.com/lvim-tech/ql/pkg/config"
-	"github.com/lvim-tech/ql/pkg/launcher"
+	"github.com/mitchellh/mapstructure"
 )
 
 func init() {
 	commands.Register(commands.Command{
 		Name:        "radio",
-		Description: "Online radio player",
+		Description: "Internet radio player",
 		Run:         Run,
 	})
 }
 
-func Run(ctx *launcher.Context) error {
-	cfg := config.Get()
-	radioCfg := cfg.Commands.Radio
+func Run(ctx commands.LauncherContext) error {
+	// Извличаме config директно
+	cfgInterface := ctx.Config().GetRadioConfig()
+	if cfgInterface == nil {
+		return fmt.Errorf("radio config not found")
+	}
 
-	// Провери дали е enabled
-	if !radioCfg.Enabled {
+	// Decode с WeaklyTypedInput
+	var cfg Config
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		WeaklyTypedInput: true,
+		Result:           &cfg,
+	})
+	if err != nil {
+		cfg = DefaultConfig()
+	} else if err := decoder.Decode(cfgInterface); err != nil {
+		cfg = DefaultConfig()
+	}
+
+	if !cfg.Enabled {
 		return fmt.Errorf("radio module is disabled in config")
 	}
 
-	// Провери дали има mpv
+	// Check if mpv is installed
 	if _, err := exec.LookPath("mpv"); err != nil {
 		return fmt.Errorf("mpv is not installed")
 	}
 
-	// Създай опции
-	stations := radioCfg.RadioStations
-	if len(stations) == 0 {
-		return fmt.Errorf("no radio stations configured")
-	}
+	// Menu options
+	options := []string{"Play Station", "Stop Radio"}
 
-	// Сортирай станциите по име
-	var stationNames []string
-	for name := range stations {
-		stationNames = append(stationNames, name)
-	}
-	sort.Strings(stationNames)
-
-	// Добави menu опции
-	options := []string{"Play Station", "Stop Playing", "Quit"}
-
-	// Покажи меню
 	choice, err := ctx.Show(options, "Radio")
 	if err != nil {
 		return err
@@ -58,57 +58,107 @@ func Run(ctx *launcher.Context) error {
 
 	switch choice {
 	case "Play Station":
-		return playStation(ctx, stationNames, stations, radioCfg.Volume)
-	case "Stop Playing":
+		return playStation(ctx, &cfg)
+	case "Stop Radio":
 		return stopRadio()
-	case "Quit":
-		return nil
 	default:
-		return nil
+		return fmt.Errorf("unknown choice: %s", choice)
 	}
 }
 
-func playStation(ctx *launcher.Context, stationNames []string, stations map[string]string, volume int) error {
-	// Избери станция
-	station, err := ctx.Show(stationNames, "Select Station")
+func playStation(ctx commands.LauncherContext, cfg *Config) error {
+	// Build station list
+	var stations []string
+	stationMap := make(map[string]string)
+
+	for name, url := range cfg.RadioStations {
+		stations = append(stations, name)
+		stationMap[name] = url
+	}
+
+	if len(stations) == 0 {
+		return fmt.Errorf("no radio stations configured")
+	}
+
+	// Show station menu
+	choice, err := ctx.Show(stations, "Select Station")
 	if err != nil {
 		return err
 	}
 
-	url, ok := stations[station]
+	url, ok := stationMap[choice]
 	if !ok {
-		return fmt.Errorf("station not found:  %s", station)
+		return fmt.Errorf("station not found: %s", choice)
 	}
 
-	// Спри текущо пускане
+	// Stop any existing radio
 	stopRadio()
 
-	// Notify
-	notify(fmt.Sprintf("Starting radio: %s", station))
-
-	// Пусни с mpv (background)
+	// Start mpv in background
 	cmd := exec.Command("mpv",
-		fmt.Sprintf("--volume=%d", volume),
 		"--no-video",
-		"--no-terminal",
-		url)
+		fmt.Sprintf("--volume=%d", cfg.Volume),
+		url,
+	)
+
+	// Detach process
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+		Pgid:    0,
+	}
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start mpv: %w", err)
+		return fmt.Errorf("failed to start radio:  %w", err)
 	}
+
+	// Save PID
+	pidFile := "/tmp/ql_radio. pid"
+	pidData := fmt.Sprintf("%d", cmd.Process.Pid)
+	if err := os.WriteFile(pidFile, []byte(pidData), 0644); err != nil {
+		cmd.Process.Kill()
+		return fmt.Errorf("failed to write PID file: %w", err)
+	}
+
+	cmd.Process.Release()
+
+	notify("Radio started", choice)
 
 	return nil
 }
 
 func stopRadio() error {
-	// Kill всички mpv процеси с http/https в аргументите
-	exec.Command("pkill", "-f", "mpv.*http").Run()
-	notify("Radio stopped")
+	pidFile := "/tmp/ql_radio.pid"
+
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return nil // No radio running
+	}
+
+	var pid int
+	if _, err := fmt.Sscanf(string(data), "%d", &pid); err != nil {
+		os.Remove(pidFile)
+		return nil
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		os.Remove(pidFile)
+		return nil
+	}
+
+	process.Signal(syscall.SIGTERM)
+	os.Remove(pidFile)
+
+	notify("Radio stopped", "")
+
 	return nil
 }
 
-func notify(message string) {
+func notify(title, message string) {
 	if _, err := exec.LookPath("notify-send"); err == nil {
-		exec.Command("notify-send", "ql radio", message).Run()
+		exec.Command("notify-send", "ql radio", fmt.Sprintf("%s\n%s", title, message)).Run()
 	}
 }

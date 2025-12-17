@@ -1,5 +1,5 @@
 // Package screenshot provides screenshot functionality for ql.
-// It supports both X11 (maim) and Wayland (grim/slurp) with multiple capture modes.
+// It supports both X11 (scrot/maim) and Wayland (grim/slurp) with multiple capture modes.
 package screenshot
 
 import (
@@ -7,256 +7,371 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/lvim-tech/ql/pkg/commands"
-	"github.com/lvim-tech/ql/pkg/config"
-	"github.com/lvim-tech/ql/pkg/launcher"
+	"github.com/mitchellh/mapstructure"
 )
 
 func init() {
 	commands.Register(commands.Command{
 		Name:        "screenshot",
-		Description: "Take screenshots",
+		Description: "Take screenshot",
 		Run:         Run,
 	})
 }
 
-func Run(ctx *launcher.Context) error {
-	cfg := config.Get()
-	screenshotCfg := cfg.Commands.Screenshot
+// Run executes the screenshot command
+func Run(ctx commands.LauncherContext) error {
+	// Извличаме config директно
+	cfgInterface := ctx.Config().GetScreenshotConfig()
 
-	// Провери дали е enabled
-	if !screenshotCfg.Enabled {
+	// Decode с WeaklyTypedInput
+	var cfg Config
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		WeaklyTypedInput: true,
+		Result:           &cfg,
+	})
+	if err != nil {
+		cfg = DefaultConfig()
+	} else if err := decoder.Decode(cfgInterface); err != nil {
+		cfg = DefaultConfig()
+	}
+
+	if !cfg.Enabled {
 		return fmt.Errorf("screenshot module is disabled in config")
 	}
 
-	// Detect session type
-	sessionType := detectSessionType()
-
-	// Създай опции
+	// Menu options
 	options := []string{
 		"Fullscreen",
 		"Active Window",
-		"Selected Region",
+		"Select Region",
 	}
 
-	if sessionType == "wayland" {
-		options = append(options, "Current Output")
-	}
-
-	// Покажи меню
-	mode, err := ctx.Show(options, "Screenshot Mode")
+	choice, err := ctx.Show(options, "Screenshot")
 	if err != nil {
 		return err
 	}
 
-	// Избери destination
-	destOptions := []string{
-		"Save to File",
-		"Copy to Clipboard",
-		"Both",
-	}
-
-	destination, err := ctx.Show(destOptions, "Destination")
-	if err != nil {
-		return err
-	}
-
-	// Вземи screenshot
-	return takeScreenshot(mode, destination, sessionType, &screenshotCfg)
-}
-
-func detectSessionType() string {
-	if os.Getenv("WAYLAND_DISPLAY") != "" {
-		return "wayland"
-	}
-	return "x11"
-}
-
-func takeScreenshot(mode, destination, sessionType string, cfg *config.ScreenshotConfig) error {
 	// Expand save dir
-	saveDir := os.ExpandEnv(cfg.SaveDir)
-	if strings.HasPrefix(saveDir, "~/") {
-		home, _ := os.UserHomeDir()
-		saveDir = filepath.Join(home, saveDir[2:])
+	saveDir := cfg.SaveDir
+	if len(saveDir) >= 2 && saveDir[:2] == "~/" {
+		saveDir = filepath.Join(os.Getenv("HOME"), saveDir[2:])
 	}
 
-	// Създай директорията ако не съществува
+	// Create directory if not exists
 	if err := os.MkdirAll(saveDir, 0755); err != nil {
 		return fmt.Errorf("failed to create save directory: %w", err)
 	}
 
-	// Генерирай filename
-	timestamp := time.Now().Format("20060102_150405")
-	filename := filepath.Join(saveDir, fmt.Sprintf("%s_%s.png", cfg.FilePrefix, timestamp))
+	// Generate filename
+	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	filename := fmt.Sprintf("%s_%s. png", cfg.FilePrefix, timestamp)
+	outputPath := filepath.Join(saveDir, filename)
 
-	// Вземи screenshot
-	var err error
-	if sessionType == "wayland" {
-		err = takeWaylandScreenshot(mode, destination, filename)
+	// Detect display server
+	isWayland := os.Getenv("WAYLAND_DISPLAY") != ""
+
+	var cmd *exec.Cmd
+
+	if isWayland {
+		cmd, err = buildWaylandCommand(choice, outputPath)
 	} else {
-		err = takeX11Screenshot(mode, destination, filename)
+		cmd, err = buildX11Command(choice, outputPath)
 	}
 
 	if err != nil {
 		return err
 	}
 
-	// Notification
-	notify(fmt.Sprintf("Screenshot saved: %s", filepath.Base(filename)))
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("screenshot failed: %w", err)
+	}
+
+	// Notify
+	notify("Screenshot saved", filename)
+
 	return nil
 }
 
-func takeWaylandScreenshot(mode, destination, filename string) error {
-	var grimArgs []string
+func buildWaylandCommand(mode, outputPath string) (*exec.Cmd, error) {
+	compositor := detectCompositor()
+
+	// Handle GNOME/KDE Wayland
+	if compositor == "gnome" {
+		return buildGNOMECommand(mode, outputPath)
+	}
+	if compositor == "kde" {
+		return buildKDECommand(mode, outputPath)
+	}
+
+	// Check for grim (generic Wayland)
+	if _, err := exec.LookPath("grim"); err != nil {
+		return nil, fmt.Errorf("grim is not installed (required for Wayland)")
+	}
 
 	switch mode {
 	case "Fullscreen":
-		grimArgs = []string{}
+		return exec.Command("grim", outputPath), nil
+
 	case "Active Window":
-		// Get active window geometry
-		geometry, err := getWaylandActiveWindowGeometry()
-		if err != nil {
-			return err
+		switch compositor {
+		case "niri":
+			var action string
+			switch mode {
+			case "Fullscreen":
+				action = "screenshot-screen"
+			case "Active Window":
+				action = "screenshot-window"
+			case "Select Region":
+				action = "screenshot"
+			default:
+				return nil, fmt.Errorf("unknown mode: %s", mode)
+			}
+
+			// Use niri's native screenshot with --path
+			// Screenshot will be in clipboard, but we save to our custom path
+			return exec.Command("niri", "msg", "action", action, "--path", outputPath), nil
+
+		case "sway":
+			cmd := exec.Command("sh", "-c",
+				fmt.Sprintf("swaymsg -t get_tree | jq -r '..  | select(. focused?  == true) | .rect | \"\\(.x),\\(.y) \\(.width)x\\(.height)\"' | grim -g - '%s'", outputPath))
+			return cmd, nil
+
+		case "hyprland":
+			cmd := exec.Command("sh", "-c",
+				fmt.Sprintf("hyprctl -j activewindow | jq -r '. at,.size | @tsv' | awk '{print $1\",\"$2\" \"$3\"x\"$4}' | grim -g - '%s'", outputPath))
+			return cmd, nil
+
+		default:
+			if _, err := exec.LookPath("slurp"); err != nil {
+				return nil, fmt.Errorf("slurp is not installed and compositor not detected")
+			}
+			cmd := exec.Command("sh", "-c", fmt.Sprintf("slurp | grim -g - '%s'", outputPath))
+			return cmd, nil
 		}
-		grimArgs = []string{"-g", geometry}
-	case "Selected Region":
-		// Use slurp for region selection
-		slurpCmd := exec.Command("slurp")
-		output, err := slurpCmd.Output()
-		if err != nil {
-			return fmt.Errorf("slurp failed: %w", err)
+
+	case "Select Region":
+		if _, err := exec.LookPath("slurp"); err != nil {
+			return nil, fmt.Errorf("slurp is not installed (required for region selection)")
 		}
-		geometry := strings.TrimSpace(string(output))
-		grimArgs = []string{"-g", geometry}
-	case "Current Output":
-		// Get current output
-		output, err := getCurrentWaylandOutput()
-		if err != nil {
-			return err
-		}
-		grimArgs = []string{"-o", output}
+		cmd := exec.Command("sh", "-c", fmt.Sprintf("slurp | grim -g - '%s'", outputPath))
+		return cmd, nil
+
+	default:
+		return nil, fmt.Errorf("unknown mode: %s", mode)
 	}
-
-	// Execute based on destination
-	if strings.Contains(destination, "Save") || destination == "Both" {
-		args := append(grimArgs, filename)
-		cmd := exec.Command("grim", args...)
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("grim failed: %w", err)
-		}
-	}
-
-	if strings.Contains(destination, "Clipboard") || destination == "Both" {
-		args := append(grimArgs, "-")
-		grimCmd := exec.Command("grim", args...)
-		wlCopyCmd := exec.Command("wl-copy")
-
-		pipe, err := grimCmd.StdoutPipe()
-		if err != nil {
-			return err
-		}
-		wlCopyCmd.Stdin = pipe
-
-		if err := grimCmd.Start(); err != nil {
-			return err
-		}
-		if err := wlCopyCmd.Start(); err != nil {
-			return err
-		}
-		if err := grimCmd.Wait(); err != nil {
-			return err
-		}
-		if err := wlCopyCmd.Wait(); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
-func takeX11Screenshot(mode, destination, filename string) error {
-	var maimArgs []string
+func buildX11Command(mode, outputPath string) (*exec.Cmd, error) {
+	de := detectDE()
+
+	// Handle GNOME/KDE X11
+	if de == "gnome" {
+		return buildGNOMECommand(mode, outputPath)
+	}
+	if de == "kde" {
+		return buildKDECommand(mode, outputPath)
+	}
+
+	// Generic X11 handling
+	switch mode {
+	case "Fullscreen":
+		if _, err := exec.LookPath("maim"); err == nil {
+			return exec.Command("maim", outputPath), nil
+		}
+		if _, err := exec.LookPath("scrot"); err == nil {
+			return exec.Command("scrot", outputPath), nil
+		}
+		return nil, fmt.Errorf("neither maim nor scrot is installed (required for X11)")
+
+	case "Active Window":
+		wm := detectX11WM()
+
+		switch wm {
+		case "i3":
+			if _, err := exec.LookPath("maim"); err == nil {
+				cmd := exec.Command("sh", "-c",
+					fmt.Sprintf("i3-msg -t get_tree | jq -r '.. | select(.focused? == true and .window?) | .rect | \"\\(.x),\\(.y) \\(.width)x\\(.height)\"' | maim -g - '%s'", outputPath))
+				return cmd, nil
+			}
+			if _, err := exec.LookPath("scrot"); err == nil {
+				return exec.Command("scrot", "-u", outputPath), nil
+			}
+
+		case "xmonad", "qtile":
+			if _, err := exec.LookPath("maim"); err == nil {
+				cmd := exec.Command("sh", "-c",
+					fmt.Sprintf("maim -i $(xdotool getactivewindow) '%s'", outputPath))
+				return cmd, nil
+			}
+			if _, err := exec.LookPath("scrot"); err == nil {
+				return exec.Command("scrot", "-u", outputPath), nil
+			}
+
+		default:
+			if _, err := exec.LookPath("maim"); err == nil {
+				if _, err := exec.LookPath("xdotool"); err == nil {
+					cmd := exec.Command("sh", "-c",
+						fmt.Sprintf("maim -i $(xdotool getactivewindow) '%s'", outputPath))
+					return cmd, nil
+				}
+			}
+			if _, err := exec.LookPath("scrot"); err == nil {
+				return exec.Command("scrot", "-u", outputPath), nil
+			}
+		}
+
+		return nil, fmt.Errorf("no suitable screenshot tool found for active window")
+
+	case "Select Region":
+		if _, err := exec.LookPath("maim"); err == nil {
+			return exec.Command("maim", "-s", outputPath), nil
+		}
+		if _, err := exec.LookPath("scrot"); err == nil {
+			return exec.Command("scrot", "-s", outputPath), nil
+		}
+		return nil, fmt.Errorf("neither maim nor scrot is installed (required for X11)")
+
+	default:
+		return nil, fmt.Errorf("unknown mode: %s", mode)
+	}
+}
+
+func buildGNOMECommand(mode, outputPath string) (*exec.Cmd, error) {
+	if _, err := exec.LookPath("gnome-screenshot"); err != nil {
+		return nil, fmt.Errorf("gnome-screenshot is not installed")
+	}
 
 	switch mode {
 	case "Fullscreen":
-		maimArgs = []string{}
+		return exec.Command("gnome-screenshot", "-f", outputPath), nil
+
 	case "Active Window":
-		activeWindow, err := exec.Command("xdotool", "getactivewindow").Output()
-		if err != nil {
-			return fmt.Errorf("failed to get active window: %w", err)
-		}
-		maimArgs = []string{"-i", strings.TrimSpace(string(activeWindow))}
-	case "Selected Region":
-		maimArgs = []string{"-s"}
+		return exec.Command("gnome-screenshot", "-w", "-f", outputPath), nil
+
+	case "Select Region":
+		return exec.Command("gnome-screenshot", "-a", "-f", outputPath), nil
+
+	default:
+		return nil, fmt.Errorf("unknown mode: %s", mode)
 	}
-
-	// Execute based on destination
-	if strings.Contains(destination, "Save") || destination == "Both" {
-		args := append(maimArgs, filename)
-		cmd := exec.Command("maim", args...)
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("maim failed: %w", err)
-		}
-	}
-
-	if strings.Contains(destination, "Clipboard") || destination == "Both" {
-		maimCmd := exec.Command("maim", maimArgs...)
-		xclipCmd := exec.Command("xclip", "-selection", "clipboard", "-t", "image/png")
-
-		pipe, err := maimCmd.StdoutPipe()
-		if err != nil {
-			return err
-		}
-		xclipCmd.Stdin = pipe
-
-		if err := maimCmd.Start(); err != nil {
-			return err
-		}
-		if err := xclipCmd.Start(); err != nil {
-			return err
-		}
-		if err := maimCmd.Wait(); err != nil {
-			return err
-		}
-		if err := xclipCmd.Wait(); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
-func getWaylandActiveWindowGeometry() (string, error) {
-	// Sway example
-	cmd := exec.Command("swaymsg", "-t", "get_tree")
-	_, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("swaymsg failed: %w", err)
+func buildKDECommand(mode, outputPath string) (*exec.Cmd, error) {
+	if _, err := exec.LookPath("spectacle"); err != nil {
+		return nil, fmt.Errorf("spectacle is not installed")
 	}
 
-	// Parse JSON to find focused window
-	// TODO: Implement proper JSON parsing with jq or encoding/json
-	return "", fmt.Errorf("active window detection not yet implemented for wayland")
+	switch mode {
+	case "Fullscreen":
+		return exec.Command("spectacle", "-fb", "-o", outputPath), nil
+
+	case "Active Window":
+		return exec.Command("spectacle", "-ab", "-o", outputPath), nil
+
+	case "Select Region":
+		return exec.Command("spectacle", "-rb", "-o", outputPath), nil
+
+	default:
+		return nil, fmt.Errorf("unknown mode: %s", mode)
+	}
 }
 
-func getCurrentWaylandOutput() (string, error) {
-	// Sway example
-	cmd := exec.Command("swaymsg", "-t", "get_outputs")
-	_, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("swaymsg failed: %w", err)
+func detectCompositor() string {
+	sessionType := os.Getenv("XDG_SESSION_TYPE")
+
+	// Only detect compositor if we're on Wayland
+	if sessionType != "wayland" {
+		return "unknown"
 	}
 
-	// Parse JSON to find focused output
-	// TODO: Implement proper JSON parsing
-	return "", fmt.Errorf("output detection not yet implemented")
+	// Check for Niri
+	if _, err := exec.LookPath("niri"); err == nil {
+		if out, err := exec.Command("niri", "msg", "version").Output(); err == nil && len(out) > 0 {
+			return "niri"
+		}
+	}
+
+	// Check for Sway
+	if os.Getenv("SWAYSOCK") != "" {
+		return "sway"
+	}
+
+	// Check for Hyprland
+	if os.Getenv("HYPRLAND_INSTANCE_SIGNATURE") != "" {
+		return "hyprland"
+	}
+
+	// Check for GNOME Wayland
+	desktop := os.Getenv("XDG_CURRENT_DESKTOP")
+	if desktop == "GNOME" || os.Getenv("DESKTOP_SESSION") == "gnome" {
+		return "gnome"
+	}
+
+	// Check for KDE Wayland
+	if desktop == "KDE" || desktop == "plasma" {
+		return "kde"
+	}
+
+	return "unknown"
 }
 
-func notify(message string) {
+func detectDE() string {
+	sessionType := os.Getenv("XDG_SESSION_TYPE")
+
+	// Only detect DE if we're on X11
+	if sessionType != "x11" {
+		return "unknown"
+	}
+
+	desktop := os.Getenv("XDG_CURRENT_DESKTOP")
+	session := os.Getenv("DESKTOP_SESSION")
+
+	// GNOME X11
+	if desktop == "GNOME" || session == "gnome" {
+		return "gnome"
+	}
+
+	// KDE/Plasma X11
+	if desktop == "KDE" || desktop == "plasma" || session == "plasma" {
+		return "kde"
+	}
+
+	return "unknown"
+}
+
+func detectX11WM() string {
+	sessionType := os.Getenv("XDG_SESSION_TYPE")
+
+	// Only relevant for X11
+	if sessionType != "x11" {
+		return "unknown"
+	}
+
+	// Check for i3
+	if _, err := exec.LookPath("i3-msg"); err == nil {
+		if out, err := exec.Command("i3-msg", "-t", "get_version").Output(); err == nil && len(out) > 0 {
+			return "i3"
+		}
+	}
+
+	// Check for xmonad
+	if out, err := exec.Command("pgrep", "-x", "xmonad").Output(); err == nil && len(out) > 0 {
+		return "xmonad"
+	}
+
+	// Check for qtile
+	if out, err := exec.Command("pgrep", "-x", "qtile").Output(); err == nil && len(out) > 0 {
+		return "qtile"
+	}
+
+	return "unknown"
+}
+
+func notify(title, message string) {
 	if _, err := exec.LookPath("notify-send"); err == nil {
-		exec.Command("notify-send", "ql screenshot", message).Run()
+		_ = exec.Command("notify-send", title, message).Run()
 	}
 }

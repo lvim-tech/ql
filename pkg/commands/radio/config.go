@@ -1,35 +1,21 @@
 package radio
 
-import "maps"
-
-// Config за radio модула
+// Config за radio
 type Config struct {
-	Enabled       bool              `toml:"enabled"`
-	Volume        int               `toml:"volume"`
-	RadioStations map[string]string `toml:"stations"`
+	Enabled       bool              `toml:"enabled" mapstructure:"enabled"`
+	Volume        int64             `toml:"volume" mapstructure:"volume"`
+	RadioStations map[string]string `toml:"stations" mapstructure:"stations"`
 }
 
-// ConfigFile за четене от TOML
-type ConfigFile struct {
-	Enabled       *bool             `toml:"enabled"`
-	Volume        *int              `toml:"volume"`
-	RadioStations map[string]string `toml:"stations"`
-}
-
-// Merge мерджва radio конфигурация
-func (c *Config) Merge(user *ConfigFile) {
-	// Enabled
-	if user.Enabled != nil {
-		c.Enabled = *user.Enabled
-	}
-
-	// Volume
-	if user.Volume != nil {
-		c.Volume = *user.Volume
-	}
-
-	// Radio stations (merge map)
-	if len(user.RadioStations) > 0 {
-		maps.Copy(c.RadioStations, user.RadioStations)
+// DefaultConfig връща default настройки
+func DefaultConfig() Config {
+	return Config{
+		Enabled: true,
+		Volume:  70,
+		RadioStations: map[string]string{
+			"Jazz FM":    "http://live.musictradio.com/JazzFMHigh",
+			"Classic FM": "http://media-ice.musicradio. com/ClassicFMMP3",
+			"Smooth FM":  "http://live.musictradio.com/SmoothFMHigh",
+		},
 	}
 }
