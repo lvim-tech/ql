@@ -201,3 +201,8 @@ func (c *Config) GetAudioRecordConfig() any {
 func (c *Config) GetVideoRecordConfig() any {
 	return c.Commands["videorecord"]
 }
+
+// GetWeatherConfig returns the weather module configuration
+func (c *Config) GetWeatherConfig() any {
+	return c.Commands["weather"]
+}
