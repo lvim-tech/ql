@@ -1,45 +1,68 @@
 package launcher
 
 import (
+	"bufio"
+	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/lvim-tech/ql/pkg/config"
 )
 
 type Fzf struct {
-	args []string
+	config *config.Config
 }
 
-func NewFzf(args []string) *Fzf {
-	return &Fzf{args: args}
+func NewFzf(cfg *config.Config) *Fzf {
+	return &Fzf{config: cfg}
 }
 
 func (f *Fzf) Show(options []string, prompt string) (string, error) {
-	args := append([]string{}, f.args...)
-	args = append(args, "--prompt", prompt+" ")
+	launcherCfg := f.config.GetLauncherConfig("fzf")
+	args := append(launcherCfg.Args, "--prompt", prompt+"> ")
 
 	cmd := exec.Command("fzf", args...)
-	cmd.Stdin = strings.NewReader(strings.Join(options, "\n"))
+	cmd.Stderr = os.Stderr
 
-	output, err := cmd.Output()
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 130 {
-			return "", ErrCancelled
-		}
-		return "", err
+		return "", fmt.Errorf("failed to create stdin pipe: %w", err)
 	}
 
-	result := strings.TrimSpace(string(output))
-	if result == "" {
-		return "", ErrCancelled
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to create stdout pipe:  %w", err)
 	}
 
-	return result, nil
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("failed to start fzf: %w", err)
+	}
+
+	// Write options to stdin
+	for _, option := range options {
+		fmt.Fprintln(stdin, option)
+	}
+	stdin.Close()
+
+	// Read selection
+	scanner := bufio.NewScanner(stdout)
+	var choice string
+	if scanner.Scan() {
+		choice = strings.TrimSpace(scanner.Text())
+	}
+
+	if err := cmd.Wait(); err != nil {
+		return "", fmt.Errorf("fzf exited with error: %w", err)
+	}
+
+	if choice == "" {
+		return "", fmt.Errorf("no selection made")
+	}
+
+	return choice, nil
 }
 
-func (f *Fzf) Name() string {
-	return "fzf"
-}
-
-func (f *Fzf) Args() []string {
-	return f.args
+func (f *Fzf) Config() *config.Config {
+	return f.config
 }

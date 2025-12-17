@@ -1,6 +1,33 @@
 # Default launcher (rofi, dmenu, fzf, bemenu, fuzzel)
 default_launcher = "rofi"
 
+# Menu style:  "flat" or "grouped"
+menu_style = "flat"
+
+# Module order (only for flat menu)
+module_order = [
+    "power",
+    "screenshot",
+    "audiorecord",
+    "videorecord",
+    "radio",
+    "wifi",
+    "mpc",
+]
+
+# Module groups (only for grouped menu)
+[module_groups.media]
+name = "Media"
+icon = "🎵"
+description = "Audio & Video"
+modules = ["radio", "mpc", "audiorecord", "videorecord"]
+
+[module_groups.system]
+name = "System"
+icon = "⚙️"
+description = "System utilities"
+modules = ["power", "screenshot", "wifi"]
+
 # Launcher configurations
 [launchers.rofi]
 args = ["-dmenu", "-i", "-p"]
@@ -79,22 +106,20 @@ enabled = true
 save_dir = "~/Videos/Recordings"
 file_prefix = "screencast"
 format = "mp4"
-quality = "23"                   # CRF:  0=lossless, 18=visually lossless, 23=default, 28=lower quality
+quality = "23"
 record_audio = true
 show_notify = true
 
-# X11 specific settings (ffmpeg)
 [commands.videorecord.x11]
-framerate = 60          # Input framerate (30, 60)
-output_fps = 30         # Output framerate (15, 30, 60)
-preset = "ultrafast"    # ultrafast, fast, medium, slow, veryslow
-video_codec = "libx264" # libx264, libx265, h264
-audio_codec = "aac"     # aac, mp3, flac
+framerate = 60
+output_fps = 30
+preset = "ultrafast"
+video_codec = "libx264"
+audio_codec = "aac"
 
-# Wayland specific settings (wf-recorder)
 [commands.videorecord.wayland]
-framerate = 60          # Input framerate (30, 60)
-output_fps = 30         # Output framerate (15, 30, 60)
-preset = "ultrafast"    # ultrafast, fast, medium, slow
-video_codec = "libx264" # libx264, h264_vaapi (hardware accel)
-audio_codec = "aac"     # aac, opus, flac
+framerate = 60
+output_fps = 30
+preset = "ultrafast"
+video_codec = "libx264"
+audio_codec = "aac"

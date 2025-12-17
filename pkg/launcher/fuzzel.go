@@ -1,45 +1,66 @@
 package launcher
 
 import (
+	"bufio"
+	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/lvim-tech/ql/pkg/config"
 )
 
 type Fuzzel struct {
-	args []string
+	config *config.Config
 }
 
-func NewFuzzel(args []string) *Fuzzel {
-	return &Fuzzel{args: args}
+func NewFuzzel(cfg *config.Config) *Fuzzel {
+	return &Fuzzel{config: cfg}
 }
 
 func (f *Fuzzel) Show(options []string, prompt string) (string, error) {
-	args := append([]string{}, f.args...)
-	args = append(args, "--dmenu", "--prompt", prompt)
+	launcherCfg := f.config.GetLauncherConfig("fuzzel")
+	args := launcherCfg.Args
 
 	cmd := exec.Command("fuzzel", args...)
-	cmd.Stdin = strings.NewReader(strings.Join(options, "\n"))
 
-	output, err := cmd.Output()
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return "", ErrCancelled
-		}
-		return "", err
+		return "", fmt.Errorf("failed to create stdin pipe: %w", err)
 	}
 
-	result := strings.TrimSpace(string(output))
-	if result == "" {
-		return "", ErrCancelled
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to create stdout pipe:  %w", err)
 	}
 
-	return result, nil
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("failed to start fuzzel: %w", err)
+	}
+
+	// Write options to stdin
+	for _, option := range options {
+		fmt.Fprintln(stdin, option)
+	}
+	stdin.Close()
+
+	// Read selection
+	scanner := bufio.NewScanner(stdout)
+	var choice string
+	if scanner.Scan() {
+		choice = strings.TrimSpace(scanner.Text())
+	}
+
+	if err := cmd.Wait(); err != nil {
+		return "", fmt.Errorf("fuzzel exited with error: %w", err)
+	}
+
+	if choice == "" {
+		return "", fmt.Errorf("no selection made")
+	}
+
+	return choice, nil
 }
 
-func (f *Fuzzel) Name() string {
-	return "fuzzel"
-}
-
-func (f *Fuzzel) Args() []string {
-	return f.args
+func (f *Fuzzel) Config() *config.Config {
+	return f.config
 }

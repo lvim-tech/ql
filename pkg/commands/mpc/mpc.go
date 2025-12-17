@@ -7,244 +7,224 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/lvim-tech/ql/pkg/commands"
-	"github.com/lvim-tech/ql/pkg/config"
-	"github.com/lvim-tech/ql/pkg/launcher"
+	"github.com/mitchellh/mapstructure"
 )
 
 func init() {
 	commands.Register(commands.Command{
 		Name:        "mpc",
-		Description: "MPD music player control",
+		Description: "MPD client",
 		Run:         Run,
 	})
 }
 
-func Run(ctx *launcher.Context) error {
-	cfg := config.Get()
-	mpcCfg := cfg.Commands.Mpc
+func Run(ctx commands.LauncherContext) error {
+	// Извличаме config директно
+	cfgInterface := ctx.Config().GetMpcConfig()
+	if cfgInterface == nil {
+		return fmt.Errorf("mpc config not found")
+	}
 
-	// Провери дали е enabled
-	if !mpcCfg.Enabled {
+	// Decode с WeaklyTypedInput
+	var cfg Config
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		WeaklyTypedInput: true,
+		Result:           &cfg,
+	})
+	if err != nil {
+		cfg = DefaultConfig()
+	} else if err := decoder.Decode(cfgInterface); err != nil {
+		cfg = DefaultConfig()
+	}
+
+	if !cfg.Enabled {
 		return fmt.Errorf("mpc module is disabled in config")
 	}
 
-	// Провери дали има mpc
+	// Check if mpc is installed
 	if _, err := exec.LookPath("mpc"); err != nil {
 		return fmt.Errorf("mpc is not installed")
 	}
 
-	// Меню опции
+	// Menu options
 	options := []string{
-		"Play",
-		"Toggle",
+		"Play/Pause",
 		"Next",
 		"Previous",
-		"Queue Playlist",
-		"Current Playlist",
 		"Stop",
+		"Select Playlist",
+		"Select Song",
+		"Show Current",
 	}
 
-	choice, err := ctx.Show(options, "MPC Control")
+	choice, err := ctx.Show(options, "MPC")
 	if err != nil {
 		return err
 	}
 
-	// Обработи избора
 	switch choice {
-	case "Play":
-		return playSong(ctx)
-	case "Toggle":
-		return mpcCommand("toggle")
+	case "Play/Pause":
+		return togglePlayPause()
 	case "Next":
-		return mpcCommand("next")
+		return next()
 	case "Previous":
-		return mpcCommand("prev")
-	case "Queue Playlist":
-		return queuePlaylist(ctx, &mpcCfg)
-	case "Current Playlist":
-		return playFromCurrentPlaylist(ctx, &mpcCfg)
+		return previous()
 	case "Stop":
-		return mpcCommand("stop")
+		return stop()
+	case "Select Playlist":
+		return selectPlaylist(ctx, &cfg)
+	case "Select Song":
+		return selectSong(ctx, &cfg)
+	case "Show Current":
+		return showCurrent()
 	default:
 		return fmt.Errorf("unknown choice: %s", choice)
 	}
 }
 
-// playSong показва всички песни и пуска избраната
-func playSong(ctx *launcher.Context) error {
-	// Вземи всички песни
-	cmd := exec.Command("mpc", "listall")
-	output, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("failed to list music: %w", err)
-	}
-
-	songs := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(songs) == 0 {
-		return fmt.Errorf("no music found")
-	}
-
-	// Покажи меню
-	song, err := ctx.Show(songs, "Music to play")
-	if err != nil {
-		return err
-	}
-
-	// Clear queue и добави песента
-	_ = mpcCommand("crop")
-
-	if err := mpcCommandWithArgs("add", song); err != nil {
-		return fmt.Errorf("failed to add song: %w", err)
-	}
-
-	// Изтрий предишната песен (position 0) ако има
-	mpcCommandWithArgs("del", "0")
-
-	// Play и repeat on
-	if err := mpcCommand("play"); err != nil {
-		return err
-	}
-
-	return mpcCommand("repeat", "on")
+func togglePlayPause() error {
+	cmd := exec.Command("mpc", "toggle")
+	return cmd.Run()
 }
 
-// queuePlaylist зарежда playlist
-func queuePlaylist(ctx *launcher.Context, cfg *config.MpcConfig) error {
-	// Вземи списък с playlists
+func next() error {
+	cmd := exec.Command("mpc", "next")
+	return cmd.Run()
+}
+
+func previous() error {
+	cmd := exec.Command("mpc", "prev")
+	return cmd.Run()
+}
+
+func stop() error {
+	cmd := exec.Command("mpc", "stop")
+	return cmd.Run()
+}
+
+func selectPlaylist(ctx commands.LauncherContext, cfg *Config) error {
+	// Get playlists
 	cmd := exec.Command("mpc", "lsplaylists")
 	output, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to list playlists: %w", err)
+		return fmt.Errorf("failed to get playlists: %w", err)
 	}
 
-	playlists := strings.Split(strings.TrimSpace(string(output)), "\n")
+	// Parse playlists
+	lines := strings.Split(string(output), "\n")
+	var playlists []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			playlists = append(playlists, line)
+		}
+	}
+
 	if len(playlists) == 0 {
 		return fmt.Errorf("no playlists found")
 	}
 
-	// Покажи меню
-	playlist, err := ctx.Show(playlists, "Your playlists")
+	// Show playlist menu
+	choice, err := ctx.Show(playlists, "Select Playlist")
 	if err != nil {
 		return err
 	}
 
-	// Clear queue
-	if err := mpcCommand("clear"); err != nil {
-		return err
+	// Load and play playlist
+	cmd = exec.Command("mpc", "clear")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to clear playlist:  %w", err)
 	}
 
-	// Load playlist
-	if err := mpcCommandWithArgs("load", playlist); err != nil {
+	cmd = exec.Command("mpc", "load", choice)
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to load playlist: %w", err)
 	}
 
-	// Play first song
-	if err := mpcCommandWithArgs("play", "1"); err != nil {
-		return err
+	cmd = exec.Command("mpc", "play")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to play:  %w", err)
 	}
 
-	// Запази текущ playlist в cache
-	cacheFile := cfg.CurrentPlaylistCache
-	if cacheFile == "" {
-		cacheFile = filepath.Join(os.Getenv("HOME"), ".cache", "ql_current_playlist")
-	}
-
-	// Expand ~ to home directory
-	if strings.HasPrefix(cacheFile, "~/") {
-		cacheFile = filepath.Join(os.Getenv("HOME"), cacheFile[2:])
-	}
-
-	// Създай директорията ако не съществува
-	if err := os.MkdirAll(filepath.Dir(cacheFile), 0755); err == nil {
-		os.WriteFile(cacheFile, []byte(playlist), 0644)
-	}
+	// Cache current playlist
+	cachePlaylist(cfg, choice)
 
 	return nil
 }
 
-// playFromCurrentPlaylist пуска песен от текущ playlist
-func playFromCurrentPlaylist(ctx *launcher.Context, cfg *config.MpcConfig) error {
-	// Прочети текущ playlist от cache
-	cacheFile := cfg.CurrentPlaylistCache
-	if cacheFile == "" {
-		cacheFile = filepath.Join(os.Getenv("HOME"), ".cache", "ql_current_playlist")
-	}
-
-	// Expand ~ to home directory
-	if strings.HasPrefix(cacheFile, "~/") {
-		cacheFile = filepath.Join(os.Getenv("HOME"), cacheFile[2:])
-	}
-
-	data, err := os.ReadFile(cacheFile)
-	if err != nil {
-		return fmt.Errorf("no current playlist cached, queue a playlist first")
-	}
-
-	playlist := strings.TrimSpace(string(data))
-
-	// Вземи песните от playlist
-	cmd := exec.Command("mpc", "playlist", playlist)
+func selectSong(ctx commands.LauncherContext, cfg *Config) error {
+	// Get current playlist
+	cmd := exec.Command("mpc", "playlist", "-f", "%position% - %artist% - %title%")
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to get playlist: %w", err)
 	}
 
-	songs := strings.Split(strings.TrimSpace(string(output)), "\n")
+	// Parse songs
+	lines := strings.Split(string(output), "\n")
+	var songs []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			songs = append(songs, line)
+		}
+	}
+
 	if len(songs) == 0 {
 		return fmt.Errorf("playlist is empty")
 	}
 
-	// Покажи меню
-	song, err := ctx.Show(songs, "Music to play")
+	// Show song menu
+	choice, err := ctx.Show(songs, "Select Song")
 	if err != nil {
 		return err
 	}
 
-	// Намери номера на песента
-	songNumber := findSongNumber(songs, song)
-	if songNumber == -1 {
-		return fmt.Errorf("song not found in playlist")
-	}
+	// Extract position (first number)
+	var position int
+	fmt.Sscanf(choice, "%d", &position)
 
-	// Clear queue и зареди playlist
-	if err := mpcCommand("clear"); err != nil {
-		return err
-	}
-
-	if err := mpcCommandWithArgs("load", playlist); err != nil {
-		return err
-	}
-
-	// Play избраната песен
-	return mpcCommandWithArgs("play", strconv.Itoa(songNumber))
-}
-
-// mpcCommand изпълнява mpc команда без аргументи
-func mpcCommand(args ...string) error {
-	cmd := exec.Command("mpc", args...)
-	cmd.Stdout = nil // Suppress output
-	cmd.Stderr = nil
+	// Play song
+	cmd = exec.Command("mpc", "play", fmt.Sprintf("%d", position))
 	return cmd.Run()
 }
 
-// mpcCommandWithArgs изпълнява mpc команда с аргументи
-func mpcCommandWithArgs(args ...string) error {
-	cmd := exec.Command("mpc", args...)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	return cmd.Run()
+func showCurrent() error {
+	cmd := exec.Command("mpc", "current", "-f", "%artist% - %title%")
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to get current song: %w", err)
+	}
+
+	current := strings.TrimSpace(string(output))
+	if current == "" {
+		current = "Nothing playing"
+	}
+
+	notify("Now Playing", current)
+
+	return nil
 }
 
-// findSongNumber намира номера на песен в списък
-func findSongNumber(songs []string, target string) int {
-	for i, song := range songs {
-		if song == target {
-			return i + 1 // mpc номерира от 1
-		}
+func cachePlaylist(cfg *Config, playlist string) {
+	cachePath := cfg.CurrentPlaylistCache
+	if len(cachePath) >= 2 && cachePath[:2] == "~/" {
+		cachePath = filepath.Join(os.Getenv("HOME"), cachePath[2:])
 	}
-	return -1
+
+	// Create cache directory
+	cacheDir := filepath.Dir(cachePath)
+	os.MkdirAll(cacheDir, 0755)
+
+	// Write playlist name
+	os.WriteFile(cachePath, []byte(playlist), 0644)
+}
+
+func notify(title, message string) {
+	if _, err := exec.LookPath("notify-send"); err == nil {
+		exec.Command("notify-send", "ql mpc", fmt.Sprintf("%s\n%s", title, message)).Run()
+	}
 }

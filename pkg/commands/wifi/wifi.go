@@ -4,207 +4,202 @@
 package wifi
 
 import (
-	"bytes"
 	"fmt"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/lvim-tech/ql/pkg/commands"
-	"github.com/lvim-tech/ql/pkg/config"
-	"github.com/lvim-tech/ql/pkg/launcher"
+	"github.com/mitchellh/mapstructure"
 )
 
 func init() {
 	commands.Register(commands.Command{
 		Name:        "wifi",
-		Description: "Connect to WiFi networks",
+		Description: "WiFi manager",
 		Run:         Run,
 	})
 }
 
-func Run(ctx *launcher.Context) error {
-	cfg := config.Get()
-	wifiCfg := cfg.Commands.Wifi
+func Run(ctx commands.LauncherContext) error {
+	// Извличаме config директно
+	cfgInterface := ctx.Config().GetWifiConfig()
+	if cfgInterface == nil {
+		return fmt.Errorf("wifi config not found")
+	}
 
-	// Провери дали е enabled
-	if !wifiCfg.Enabled {
+	// Decode с WeaklyTypedInput
+	var cfg Config
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		WeaklyTypedInput: true,
+		Result:           &cfg,
+	})
+	if err != nil {
+		cfg = DefaultConfig()
+	} else if err := decoder.Decode(cfgInterface); err != nil {
+		cfg = DefaultConfig()
+	}
+
+	if !cfg.Enabled {
 		return fmt.Errorf("wifi module is disabled in config")
 	}
 
-	// Провери дали има nmcli
+	// Check if nmcli is installed
 	if _, err := exec.LookPath("nmcli"); err != nil {
-		return fmt.Errorf("nmcli is not installed")
+		return fmt.Errorf("nmcli is not installed (required for wifi management)")
 	}
 
-	// Провери дали NetworkManager работи
-	if err := checkNetworkManager(); err != nil {
-		return err
+	// Menu options
+	options := []string{
+		"Connect to Network",
+		"Disconnect",
+		"Show Current Connection",
+		"Toggle WiFi",
 	}
 
-	// Включи WiFi ако е изключен
-	enableWifi()
-
-	// Rescan за нови мрежи
-	rescanWifi()
-
-	// Вземи списък с WiFi мрежи
-	networks, err := getWifiNetworks()
-	if err != nil {
-		return fmt.Errorf("failed to get wifi networks: %w", err)
-	}
-
-	if len(networks) == 0 {
-		return fmt.Errorf("no wifi networks found")
-	}
-
-	// Покажи меню
-	choice, err := ctx.Show(networks, "Select WiFi")
+	choice, err := ctx.Show(options, "WiFi")
 	if err != nil {
 		return err
 	}
 
-	// Извлечи SSID
-	ssid := extractSSID(choice)
+	switch choice {
+	case "Connect to Network":
+		return connectToNetwork(ctx, &cfg)
+	case "Disconnect":
+		return disconnect(&cfg)
+	case "Show Current Connection":
+		return showCurrentConnection(&cfg)
+	case "Toggle WiFi":
+		return toggleWifi(&cfg)
+	default:
+		return fmt.Errorf("unknown choice: %s", choice)
+	}
+}
 
-	// Попитай за парола
-	password, err := ctx.ShowInput("Enter Password", "")
+func connectToNetwork(ctx commands.LauncherContext, cfg *Config) error {
+	// Scan for networks
+	cmd := exec.Command("nmcli", "-t", "-f", "SSID", "dev", "wifi", "list")
+	output, err := cmd.Output()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to scan networks: %w", err)
 	}
 
-	// Свържи се
-	if err := connectToWifi(ssid, password); err != nil {
-		if wifiCfg.ShowNotify {
-			notify("Failed to connect to WiFi")
-		}
-		return fmt.Errorf("failed to connect:  %w", err)
-	}
-
-	// Изчакай малко
-	time.Sleep(3 * time.Second)
-
-	// Тествай connection
-	if testConnection(wifiCfg.TestHost, wifiCfg.TestCount, wifiCfg.TestWait) {
-		if wifiCfg.ShowNotify {
-			notify("WiFi connected!  Internet is working")
-		}
-	} else {
-		if wifiCfg.ShowNotify {
-			notify("WiFi connected but internet is not working")
-		}
-	}
-
-	return nil
-}
-
-// checkNetworkManager проверява дали NetworkManager работи
-func checkNetworkManager() error {
-	cmd := exec.Command("nmcli", "general", "status")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("NetworkManager is not running.  Please start it with: sudo systemctl start NetworkManager")
-	}
-	return nil
-}
-
-// enableWifi включва WiFi ако е изключен
-func enableWifi() {
-	exec.Command("nmcli", "radio", "wifi", "on").Run()
-}
-
-// rescanWifi прави rescan за нови мрежи
-func rescanWifi() {
-	exec.Command("nmcli", "device", "wifi", "rescan").Run()
-	time.Sleep(2 * time.Second)
-}
-
-// getWifiNetworks връща списък с WiFi мрежи
-func getWifiNetworks() ([]string, error) {
-	cmd := exec.Command("nmcli", "--fields", "SSID,SIGNAL,SECURITY", "device", "wifi", "list")
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("nmcli error: %s (stderr: %s)", err, stderr.String())
-	}
-
-	output := stdout.String()
-	lines := strings.Split(output, "\n")
-
-	if len(lines) <= 1 {
-		return nil, fmt.Errorf("no networks found")
-	}
-
-	// Skip header line и празни редове
+	// Parse networks
+	lines := strings.Split(string(output), "\n")
 	var networks []string
-	for i, line := range lines {
-		if i == 0 { // Skip header
-			continue
-		}
+	seen := make(map[string]bool)
 
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+	for _, line := range lines {
+		ssid := strings.TrimSpace(line)
+		if ssid != "" && !seen[ssid] {
+			networks = append(networks, ssid)
+			seen[ssid] = true
 		}
-
-		// Добави мрежата
-		networks = append(networks, line)
 	}
 
 	if len(networks) == 0 {
-		return nil, fmt.Errorf("no networks found after parsing")
+		return fmt.Errorf("no networks found")
 	}
 
-	return networks, nil
-}
-
-// extractSSID извлича SSID от избрания ред
-func extractSSID(choice string) string {
-	// Формат: "SSID  SIGNAL  SECURITY"
-	// Вземи първото поле (SSID)
-	fields := strings.Fields(choice)
-	if len(fields) > 0 {
-		return fields[0]
-	}
-	return choice
-}
-
-// connectToWifi се свързва към WiFi мрежа
-func connectToWifi(ssid, password string) error {
-	var cmd *exec.Cmd
-
-	if password != "" {
-		cmd = exec.Command("nmcli", "device", "wifi", "connect", ssid, "password", password)
-	} else {
-		cmd = exec.Command("nmcli", "device", "wifi", "connect", ssid)
+	// Show network menu
+	choice, err := ctx.Show(networks, "Select Network")
+	if err != nil {
+		return err
 	}
 
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
+	// Connect (will prompt for password if needed)
+	cmd = exec.Command("nmcli", "dev", "wifi", "connect", choice)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%w: %s", err, stderr.String())
+		if cfg.ShowNotify {
+			notify("Connection failed", choice)
+		}
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+
+	if cfg.ShowNotify {
+		notify("Connected to", choice)
 	}
 
 	return nil
 }
 
-// testConnection тества дали интернет връзката работи
-func testConnection(host string, count, wait int) bool {
-	cmd := exec.Command("ping",
-		"-q",
-		"-c", fmt.Sprintf("%d", count),
-		"-W", fmt.Sprintf("%d", wait),
-		host)
+func disconnect(cfg *Config) error {
+	// Get current connection
+	cmd := exec.Command("nmcli", "-t", "-f", "NAME", "con", "show", "--active")
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to get active connection: %w", err)
+	}
 
-	return cmd.Run() == nil
+	connection := strings.TrimSpace(string(output))
+	if connection == "" {
+		return fmt.Errorf("no active connection")
+	}
+
+	// Disconnect
+	cmd = exec.Command("nmcli", "con", "down", connection)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to disconnect: %w", err)
+	}
+
+	if cfg.ShowNotify {
+		notify("Disconnected from", connection)
+	}
+
+	return nil
 }
 
-// notify изпраща notification
-func notify(message string) {
+func showCurrentConnection(cfg *Config) error {
+	cmd := exec.Command("nmcli", "-t", "-f", "NAME,TYPE,DEVICE", "con", "show", "--active")
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to get connection info: %w", err)
+	}
+
+	info := strings.TrimSpace(string(output))
+	if info == "" {
+		info = "No active connection"
+	}
+
+	if cfg.ShowNotify {
+		notify("Current Connection", info)
+	}
+
+	return nil
+}
+
+func toggleWifi(cfg *Config) error {
+	// Check current state
+	cmd := exec.Command("nmcli", "radio", "wifi")
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to get wifi state: %w", err)
+	}
+
+	state := strings.TrimSpace(string(output))
+
+	// Toggle
+	var newState string
+	if state == "enabled" {
+		cmd = exec.Command("nmcli", "radio", "wifi", "off")
+		newState = "disabled"
+	} else {
+		cmd = exec.Command("nmcli", "radio", "wifi", "on")
+		newState = "enabled"
+	}
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to toggle wifi: %w", err)
+	}
+
+	if cfg.ShowNotify {
+		notify("WiFi", fmt.Sprintf("WiFi %s", newState))
+	}
+
+	return nil
+}
+
+func notify(title, message string) {
 	if _, err := exec.LookPath("notify-send"); err == nil {
-		exec.Command("notify-send", "ql wifi", message).Run()
+		exec.Command("notify-send", "ql wifi", fmt.Sprintf("%s\n%s", title, message)).Run()
 	}
 }

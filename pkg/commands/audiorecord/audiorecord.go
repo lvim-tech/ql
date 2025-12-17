@@ -6,39 +6,48 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/lvim-tech/ql/pkg/commands"
-	"github.com/lvim-tech/ql/pkg/config"
-	"github.com/lvim-tech/ql/pkg/launcher"
+	"github.com/mitchellh/mapstructure"
 )
 
 func init() {
 	commands.Register(commands.Command{
 		Name:        "audiorecord",
-		Description: "Record audio",
+		Description: "Record audio from microphone",
 		Run:         Run,
 	})
 }
 
-func Run(ctx *launcher.Context) error {
-	cfg := config.Get()
-	audioCfg := cfg.Commands.AudioRecord
+func Run(ctx commands.LauncherContext) error {
+	// Извличаме config директно
+	cfgInterface := ctx.Config().GetAudioRecordConfig()
+	if cfgInterface == nil {
+		return fmt.Errorf("audiorecord config not found")
+	}
 
-	// Провери дали е enabled
-	if !audioCfg.Enabled {
+	// Decode с WeaklyTypedInput
+	var cfg Config
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		WeaklyTypedInput: true,
+		Result:           &cfg,
+	})
+	if err != nil {
+		cfg = DefaultConfig()
+	} else if err := decoder.Decode(cfgInterface); err != nil {
+		cfg = DefaultConfig()
+	}
+
+	if !cfg.Enabled {
 		return fmt.Errorf("audiorecord module is disabled in config")
 	}
 
-	// Провери дали има ffmpeg
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return fmt.Errorf("ffmpeg is not installed")
-	}
-
-	// Меню опции
+	// Menu options
 	options := []string{
 		"Start Recording",
 		"Stop Recording",
@@ -51,7 +60,7 @@ func Run(ctx *launcher.Context) error {
 
 	switch choice {
 	case "Start Recording":
-		return startRecording(&audioCfg)
+		return startRecording(&cfg)
 	case "Stop Recording":
 		return stopRecording()
 	default:
@@ -59,132 +68,197 @@ func Run(ctx *launcher.Context) error {
 	}
 }
 
-// startRecording започва audio запис
-func startRecording(cfg *config.AudioRecordConfig) error {
+func startRecording(cfg *Config) error {
+	// Check if already recording
+	if isRecording() {
+		return fmt.Errorf("recording already in progress")
+	}
+
+	// Check if ffmpeg is installed
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		return fmt.Errorf("ffmpeg is not installed")
+	}
+
 	// Expand save dir
 	saveDir := cfg.SaveDir
-	if saveDir[:2] == "~/" {
+	if len(saveDir) >= 2 && saveDir[:2] == "~/" {
 		saveDir = filepath.Join(os.Getenv("HOME"), saveDir[2:])
 	}
 
-	// Създай директорията ако не съществува
+	// Create directory if not exists
 	if err := os.MkdirAll(saveDir, 0755); err != nil {
 		return fmt.Errorf("failed to create save directory: %w", err)
 	}
 
-	// Генерирай име на файл
+	// Generate unique filename
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
 	filename := fmt.Sprintf("%s_%s.%s", cfg.FilePrefix, timestamp, cfg.Format)
-	filepath := filepath.Join(saveDir, filename)
+	outputPath := filepath.Join(saveDir, filename)
 
-	// Опитай PulseAudio/PipeWire (работи и на X11 и на Wayland)
-	audioDevice := detectAudioDevice()
-	if audioDevice == "" {
-		return fmt.Errorf("no audio device found (PulseAudio/PipeWire required)")
+	// If file exists, add milliseconds to make it unique
+	if _, err := os.Stat(outputPath); err == nil {
+		timestamp = time.Now().Format("2006-01-02_15-04-05.000")
+		filename = fmt.Sprintf("%s_%s.%s", cfg.FilePrefix, timestamp, cfg.Format)
+		outputPath = filepath.Join(saveDir, filename)
 	}
 
-	// Запиши PID в temp файл за спиране
-	pidFile := "/tmp/ql_audiorecord. pid"
-
-	// Стартирай ffmpeg в background
-	cmd := exec.Command("ffmpeg",
-		"-f", audioDevice,
+	// Build ffmpeg command
+	args := []string{
+		"-f", "pulse",
 		"-i", "default",
-		"-c:a", getAudioCodec(cfg.Format),
 		"-q:a", cfg.Quality,
-		filepath,
-	)
+		"-n",
+		outputPath,
+	}
 
+	cmd := exec.Command("ffmpeg", args...)
+
+	// Redirect stderr/stdout to /dev/null
+	devNull, err := os.Open(os.DevNull)
+	if err == nil {
+		cmd.Stderr = devNull
+		cmd.Stdout = devNull
+		defer devNull.Close()
+	}
+
+	// Start recording
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start recording: %w", err)
 	}
 
-	// Запиши PID
-	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0644); err != nil {
+	// Save PID immediately after start
+	pidFile := getPIDFile()
+	pidBytes := []byte(strconv.Itoa(cmd.Process.Pid))
+	if err := os.WriteFile(pidFile, pidBytes, 0644); err != nil {
 		cmd.Process.Kill()
-		return fmt.Errorf("failed to write PID file: %w", err)
+		return fmt.Errorf("failed to save PID: %w", err)
 	}
 
-	notify("Audio recording started", filename)
+	// Save output path
+	pathFile := getOutputPathFile()
+	if err := os.WriteFile(pathFile, []byte(outputPath), 0644); err != nil {
+		cmd.Process.Kill()
+		os.Remove(pidFile)
+		return fmt.Errorf("failed to save output path: %w", err)
+	}
 
-	// Handle Ctrl+C
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
+	// Monitor the process in a goroutine
 	go func() {
-		<-sigChan
-		stopRecording()
+		cmd.Wait()
+		// Clean up PID files when process exits
+		os.Remove(pidFile)
+		os.Remove(pathFile)
 	}()
+
+	// Give the process a moment to actually start
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify it's still running
+	if !isRecording() {
+		return fmt.Errorf("recording process failed to start")
+	}
+
+	// Notify
+	notify("Recording Started", filename)
 
 	return nil
 }
 
-// stopRecording спира audio запис
 func stopRecording() error {
-	pidFile := "/tmp/ql_audiorecord.pid"
-
-	data, err := os.ReadFile(pidFile)
-	if err != nil {
+	if !isRecording() {
 		return fmt.Errorf("no recording in progress")
 	}
 
-	var pid int
-	if _, err := fmt.Sscanf(string(data), "%d", &pid); err != nil {
-		return fmt.Errorf("invalid PID file")
+	pidFile := getPIDFile()
+	pathFile := getOutputPathFile()
+
+	// Read PID
+	pidData, err := os.ReadFile(pidFile)
+	if err != nil {
+		return fmt.Errorf("failed to read PID file: %w", err)
 	}
 
-	// Изпрати SIGINT за graceful shutdown
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
+	if err != nil {
+		return fmt.Errorf("invalid PID:  %w", err)
+	}
+
+	// Read output path
+	outputPath, err := os.ReadFile(pathFile)
+	if err != nil {
+		return fmt.Errorf("failed to read output path: %w", err)
+	}
+
+	// Send SIGINT to gracefully stop ffmpeg
 	process, err := os.FindProcess(pid)
 	if err != nil {
-		return fmt.Errorf("recording process not found")
+		return fmt.Errorf("failed to find process: %w", err)
 	}
 
 	if err := process.Signal(syscall.SIGINT); err != nil {
 		return fmt.Errorf("failed to stop recording: %w", err)
 	}
 
-	// Изтрий PID file
-	os.Remove(pidFile)
+	// Wait a bit for process to finish
+	time.Sleep(1 * time.Second)
 
-	notify("Audio recording stopped", "")
+	// Clean up
+	os.Remove(pidFile)
+	os.Remove(pathFile)
+
+	filename := filepath.Base(string(outputPath))
+
+	// Notify
+	notify("Recording Stopped", filename)
 
 	return nil
 }
 
-// detectAudioDevice открива audio device (pulse or pipewire)
-func detectAudioDevice() string {
-	// Провери за PipeWire
-	if _, err := exec.LookPath("pw-cli"); err == nil {
-		return "pulse" // PipeWire има pulse compatibility
+// Helper functions
+
+func isRecording() bool {
+	pidFile := getPIDFile()
+	if _, err := os.Stat(pidFile); os.IsNotExist(err) {
+		return false
 	}
 
-	// Провери за PulseAudio
-	if _, err := exec.LookPath("pactl"); err == nil {
-		return "pulse"
+	// Check if process is actually running
+	pidData, err := os.ReadFile(pidFile)
+	if err != nil {
+		return false
 	}
 
-	return ""
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
+	if err != nil {
+		return false
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+
+	// Send signal 0 to check if process exists
+	err = process.Signal(syscall.Signal(0))
+	if err != nil {
+		// Process doesn't exist - clean up stale PID file
+		os.Remove(pidFile)
+		os.Remove(getOutputPathFile())
+		return false
+	}
+
+	return true
 }
 
-// getAudioCodec връща codec за format
-func getAudioCodec(format string) string {
-	switch format {
-	case "mp3":
-		return "libmp3lame"
-	case "ogg":
-		return "libvorbis"
-	case "flac":
-		return "flac"
-	case "wav":
-		return "pcm_s16le"
-	default:
-		return "libmp3lame"
-	}
+func getPIDFile() string {
+	return filepath.Join(os.TempDir(), "ql_audiorecord. pid")
 }
 
-// notify изпраща notification
+func getOutputPathFile() string {
+	return filepath.Join(os.TempDir(), "ql_audiorecord_output.txt")
+}
+
 func notify(title, message string) {
-	if _, err := exec.LookPath("notify-send"); err == nil {
-		exec.Command("notify-send", "ql audiorecord", fmt.Sprintf("%s\n%s", title, message)).Run()
-	}
+	cmd := exec.Command("notify-send", title, message)
+	cmd.Run()
 }
