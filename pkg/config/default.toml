@@ -13,6 +13,7 @@ module_order = [
     "radio",
     "wifi",
     "mpc",
+    "weather",
 ]
 
 # Module groups (only for grouped menu)
@@ -123,3 +124,9 @@ output_fps = 30
 preset = "ultrafast"
 video_codec = "libx264"
 audio_codec = "aac"
+
+[commands.weather]
+enabled = true
+locations = ["Sofia", "Varna", "Plovdiv", "London", "New York"]
+options = ""                                                    # wttr.in options: "lang=bg", "m" (metric), "format=3", etc.
+timeout = 30                                                    # HTTP request timeout in seconds

@@ -11,6 +11,7 @@ import (
 	_ "github.com/lvim-tech/ql/pkg/commands/radio"
 	_ "github.com/lvim-tech/ql/pkg/commands/screenshot"
 	_ "github.com/lvim-tech/ql/pkg/commands/videorecord"
+	_ "github.com/lvim-tech/ql/pkg/commands/weather"
 	_ "github.com/lvim-tech/ql/pkg/commands/wifi"
 	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/launcher"
