@@ -21,14 +21,9 @@ func init() {
 	})
 }
 
-func Run(ctx commands.LauncherContext) error {
-	// Извличаме config директно
+func Run(ctx commands.LauncherContext) commands.CommandResult {
 	cfgInterface := ctx.Config().GetMpcConfig()
-	if cfgInterface == nil {
-		return fmt.Errorf("mpc config not found")
-	}
 
-	// Decode с WeaklyTypedInput
 	var cfg Config
 	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		WeaklyTypedInput: true,
@@ -36,52 +31,74 @@ func Run(ctx commands.LauncherContext) error {
 	})
 	if err != nil {
 		cfg = DefaultConfig()
-	} else if err := decoder.Decode(cfgInterface); err != nil {
-		cfg = DefaultConfig()
+	} else {
+		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
+			cfg = DefaultConfig()
+		}
 	}
 
 	if !cfg.Enabled {
-		return fmt.Errorf("mpc module is disabled in config")
+		return commands.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("mpc module is disabled in config"),
+		}
 	}
 
-	// Check if mpc is installed
 	if _, err := exec.LookPath("mpc"); err != nil {
-		return fmt.Errorf("mpc is not installed")
+		return commands.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("mpc is not installed"),
+		}
 	}
 
-	// Menu options
-	options := []string{
-		"Play/Pause",
-		"Next",
-		"Previous",
-		"Stop",
-		"Select Playlist",
-		"Select Song",
-		"Show Current",
-	}
+	for {
+		options := []string{
+			"← Back",
+			"Play/Pause",
+			"Next",
+			"Previous",
+			"Stop",
+			"Select Playlist",
+			"Select Song",
+			"Show Current",
+		}
 
-	choice, err := ctx.Show(options, "MPC")
-	if err != nil {
-		return err
-	}
+		choice, err := ctx.Show(options, "MPC")
+		if err != nil {
+			return commands.CommandResult{Success: false}
+		}
 
-	switch choice {
-	case "Play/Pause":
-		return togglePlayPause()
-	case "Next":
-		return next()
-	case "Previous":
-		return previous()
-	case "Stop":
-		return stop()
-	case "Select Playlist":
-		return selectPlaylist(ctx, &cfg)
-	case "Select Song":
-		return selectSong(ctx, &cfg)
-	case "Show Current":
-		return showCurrent()
-	default:
-		return fmt.Errorf("unknown choice: %s", choice)
+		if choice == "← Back" {
+			return commands.CommandResult{Success: false}
+		}
+
+		var actionErr error
+		switch choice {
+		case "Play/Pause":
+			actionErr = togglePlayPause()
+		case "Next":
+			actionErr = next()
+		case "Previous":
+			actionErr = previous()
+		case "Stop":
+			actionErr = stop()
+		case "Select Playlist":
+			actionErr = selectPlaylist(ctx, &cfg)
+		case "Select Song":
+			actionErr = selectSong(ctx)
+		case "Show Current":
+			actionErr = showCurrent()
+		default:
+			showErrorNotification("MPC Error", fmt.Sprintf("Unknown choice: %s", choice))
+			continue
+		}
+
+		if actionErr != nil {
+			showErrorNotification("MPC Error", actionErr.Error())
+			continue
+		}
+
+		return commands.CommandResult{Success: true}
 	}
 }
 
@@ -106,14 +123,12 @@ func stop() error {
 }
 
 func selectPlaylist(ctx commands.LauncherContext, cfg *Config) error {
-	// Get playlists
 	cmd := exec.Command("mpc", "lsplaylists")
 	output, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to get playlists: %w", err)
+		return fmt.Errorf("failed to get playlists:  %w", err)
 	}
 
-	// Parse playlists
 	lines := strings.Split(string(output), "\n")
 	var playlists []string
 	for _, line := range lines {
@@ -127,16 +142,20 @@ func selectPlaylist(ctx commands.LauncherContext, cfg *Config) error {
 		return fmt.Errorf("no playlists found")
 	}
 
-	// Show playlist menu
+	playlists = append([]string{"← Back"}, playlists...)
+
 	choice, err := ctx.Show(playlists, "Select Playlist")
 	if err != nil {
-		return err
+		return fmt.Errorf("cancelled")
 	}
 
-	// Load and play playlist
+	if choice == "← Back" {
+		return fmt.Errorf("cancelled")
+	}
+
 	cmd = exec.Command("mpc", "clear")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to clear playlist:  %w", err)
+		return fmt.Errorf("failed to clear playlist: %w", err)
 	}
 
 	cmd = exec.Command("mpc", "load", choice)
@@ -146,24 +165,21 @@ func selectPlaylist(ctx commands.LauncherContext, cfg *Config) error {
 
 	cmd = exec.Command("mpc", "play")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to play:  %w", err)
+		return fmt.Errorf("failed to play: %w", err)
 	}
 
-	// Cache current playlist
 	cachePlaylist(cfg, choice)
 
 	return nil
 }
 
-func selectSong(ctx commands.LauncherContext, cfg *Config) error {
-	// Get current playlist
+func selectSong(ctx commands.LauncherContext) error {
 	cmd := exec.Command("mpc", "playlist", "-f", "%position% - %artist% - %title%")
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to get playlist: %w", err)
 	}
 
-	// Parse songs
 	lines := strings.Split(string(output), "\n")
 	var songs []string
 	for _, line := range lines {
@@ -177,17 +193,20 @@ func selectSong(ctx commands.LauncherContext, cfg *Config) error {
 		return fmt.Errorf("playlist is empty")
 	}
 
-	// Show song menu
+	songs = append([]string{"← Back"}, songs...)
+
 	choice, err := ctx.Show(songs, "Select Song")
 	if err != nil {
-		return err
+		return fmt.Errorf("cancelled")
 	}
 
-	// Extract position (first number)
+	if choice == "← Back" {
+		return fmt.Errorf("cancelled")
+	}
+
 	var position int
 	fmt.Sscanf(choice, "%d", &position)
 
-	// Play song
 	cmd = exec.Command("mpc", "play", fmt.Sprintf("%d", position))
 	return cmd.Run()
 }
@@ -215,16 +234,38 @@ func cachePlaylist(cfg *Config, playlist string) {
 		cachePath = filepath.Join(os.Getenv("HOME"), cachePath[2:])
 	}
 
-	// Create cache directory
 	cacheDir := filepath.Dir(cachePath)
 	os.MkdirAll(cacheDir, 0755)
 
-	// Write playlist name
 	os.WriteFile(cachePath, []byte(playlist), 0644)
 }
 
 func notify(title, message string) {
 	if _, err := exec.LookPath("notify-send"); err == nil {
 		exec.Command("notify-send", "ql mpc", fmt.Sprintf("%s\n%s", title, message)).Run()
+	}
+}
+
+func showErrorNotification(title, message string) {
+	if _, err := exec.LookPath("dunstify"); err == nil {
+		cmd := exec.Command("dunstify",
+			"-u", "critical",
+			"-t", "10000",
+			title,
+			message)
+		cmd.Env = os.Environ()
+		cmd.Start()
+		return
+	}
+
+	if _, err := exec.LookPath("notify-send"); err == nil {
+		cmd := exec.Command("notify-send",
+			"-u", "critical",
+			"-t", "10000",
+			title,
+			message)
+		cmd.Env = os.Environ()
+		cmd.Start()
+		return
 	}
 }

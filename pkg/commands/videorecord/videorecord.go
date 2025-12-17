@@ -23,14 +23,9 @@ func init() {
 	})
 }
 
-func Run(ctx commands.LauncherContext) error {
-	// Извличаме config директно
+func Run(ctx commands.LauncherContext) commands.CommandResult {
 	cfgInterface := ctx.Config().GetVideoRecordConfig()
-	if cfgInterface == nil {
-		return fmt.Errorf("videorecord config not found")
-	}
 
-	// Decode с WeaklyTypedInput
 	var cfg Config
 	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		WeaklyTypedInput: true,
@@ -38,59 +33,73 @@ func Run(ctx commands.LauncherContext) error {
 	})
 	if err != nil {
 		cfg = DefaultConfig()
-	} else if err := decoder.Decode(cfgInterface); err != nil {
-		cfg = DefaultConfig()
+	} else {
+		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
+			cfg = DefaultConfig()
+		}
 	}
 
-	// Провери дали е enabled
 	if !cfg.Enabled {
-		return fmt.Errorf("videorecord module is disabled in config")
+		return commands.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("videorecord module is disabled in config"),
+		}
 	}
 
-	// Меню опции
-	options := []string{
-		"Start Recording",
-		"Stop Recording",
-	}
+	for {
+		options := []string{
+			"← Back",
+			"Start Recording",
+			"Stop Recording",
+		}
 
-	choice, err := ctx.Show(options, "Video Record")
-	if err != nil {
-		return err
-	}
+		choice, err := ctx.Show(options, "Video Record")
+		if err != nil {
+			return commands.CommandResult{Success: false}
+		}
 
-	switch choice {
-	case "Start Recording":
-		return startRecording(ctx, &cfg)
-	case "Stop Recording":
-		return stopRecording(&cfg)
-	default:
-		return fmt.Errorf("unknown choice: %s", choice)
+		if choice == "← Back" {
+			return commands.CommandResult{Success: false}
+		}
+
+		var actionErr error
+		switch choice {
+		case "Start Recording":
+			actionErr = startRecording(ctx, &cfg)
+		case "Stop Recording":
+			actionErr = stopRecording(&cfg)
+		default:
+			showErrorNotification("Video Record Error", fmt.Sprintf("Unknown choice: %s", choice))
+			continue
+		}
+
+		if actionErr != nil {
+			showErrorNotification("Video Record Error", actionErr.Error())
+			continue
+		}
+
+		return commands.CommandResult{Success: true}
 	}
 }
 
-// startRecording започва video запис
 func startRecording(ctx commands.LauncherContext, cfg *Config) error {
-	// Expand save dir
 	saveDir := cfg.SaveDir
 	if len(saveDir) >= 2 && saveDir[:2] == "~/" {
 		saveDir = filepath.Join(os.Getenv("HOME"), saveDir[2:])
 	}
 
-	// Създай директорията ако не съществува
 	if err := os.MkdirAll(saveDir, 0755); err != nil {
-		return fmt.Errorf("failed to create save directory:  %w", err)
+		return fmt.Errorf("failed to create save directory: %w", err)
 	}
 
-	// Генерирай име на файл
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
 	filename := fmt.Sprintf("%s_%s.%s", cfg.FilePrefix, timestamp, cfg.Format)
 	outputPath := filepath.Join(saveDir, filename)
 
-	// Провери дали е Wayland или X11
 	isWayland := os.Getenv("WAYLAND_DISPLAY") != ""
 
-	// Меню за избор на region (общо за X11 и Wayland)
 	regionOptions := []string{
+		"← Back",
 		"Fullscreen",
 		"Active Window",
 		"Select Region",
@@ -98,7 +107,11 @@ func startRecording(ctx commands.LauncherContext, cfg *Config) error {
 
 	regionChoice, err := ctx.Show(regionOptions, "Recording Region")
 	if err != nil {
-		return err
+		return fmt.Errorf("cancelled")
+	}
+
+	if regionChoice == "← Back" {
+		return fmt.Errorf("cancelled")
 	}
 
 	var cmd *exec.Cmd
@@ -115,25 +128,21 @@ func startRecording(ctx commands.LauncherContext, cfg *Config) error {
 		}
 	}
 
-	// Detach процеса - no stdin, stdout, stderr
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 
-	// Създай нов process group
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
 		Pgid:    0,
 	}
 
-	// Запиши PID в temp файл
 	pidFile := "/tmp/ql_videorecord.pid"
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start recording: %w", err)
 	}
 
-	// Запиши PID и output path
 	pidData := fmt.Sprintf("%d\n%s", cmd.Process.Pid, outputPath)
 	if err := os.WriteFile(pidFile, []byte(pidData), 0644); err != nil {
 		cmd.Process.Kill()
@@ -144,13 +153,11 @@ func startRecording(ctx commands.LauncherContext, cfg *Config) error {
 		notify("Video recording started", filename)
 	}
 
-	// Release процеса - ql може да излезе, записът продължава
 	cmd.Process.Release()
 
 	return nil
 }
 
-// buildWaylandCommand build wf-recorder command
 func buildWaylandCommand(region, outputPath string, cfg *Config) (*exec.Cmd, error) {
 	if _, err := exec.LookPath("wf-recorder"); err != nil {
 		return nil, fmt.Errorf("wf-recorder is not installed (required for Wayland)")
@@ -164,7 +171,6 @@ func buildWaylandCommand(region, outputPath string, cfg *Config) (*exec.Cmd, err
 		"-r", fmt.Sprintf("%d", cfg.Wayland.Framerate),
 	}
 
-	// Audio
 	if cfg.RecordAudio {
 		args = append(args, "--audio")
 		args = append(args, "-a", cfg.Wayland.AudioCodec)
@@ -172,7 +178,6 @@ func buildWaylandCommand(region, outputPath string, cfg *Config) (*exec.Cmd, err
 
 	switch region {
 	case "Fullscreen":
-		// No extra args needed
 
 	case "Active Window":
 		windowGeometry, err := getWaylandActiveWindow()
@@ -201,7 +206,6 @@ func buildWaylandCommand(region, outputPath string, cfg *Config) (*exec.Cmd, err
 	return exec.Command("wf-recorder", args...), nil
 }
 
-// buildX11Command build ffmpeg command for X11
 func buildX11Command(region, outputPath string, cfg *Config) (*exec.Cmd, error) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return nil, fmt.Errorf("ffmpeg is not installed")
@@ -248,7 +252,6 @@ func buildX11Command(region, outputPath string, cfg *Config) (*exec.Cmd, error) 
 		}
 	}
 
-	// Audio
 	if cfg.RecordAudio {
 		audioDevice := detectAudioDevice()
 		if audioDevice != "" {
@@ -256,7 +259,6 @@ func buildX11Command(region, outputPath string, cfg *Config) (*exec.Cmd, error) 
 		}
 	}
 
-	// Video encoding - FROM CONFIG
 	args = append(args,
 		"-r", fmt.Sprintf("%d", cfg.X11.OutputFPS),
 		"-c:v", cfg.X11.VideoCodec,
@@ -264,7 +266,6 @@ func buildX11Command(region, outputPath string, cfg *Config) (*exec.Cmd, error) 
 		"-preset", cfg.X11.Preset,
 	)
 
-	// Audio codec
 	if cfg.RecordAudio {
 		args = append(args, "-c:a", cfg.X11.AudioCodec)
 	}
@@ -274,41 +275,31 @@ func buildX11Command(region, outputPath string, cfg *Config) (*exec.Cmd, error) 
 	return exec.Command("ffmpeg", args...), nil
 }
 
-// getWaylandActiveWindow tries to get active window geometry on Wayland
 func getWaylandActiveWindow() (string, error) {
-	// Try Sway
 	if _, err := exec.LookPath("swaymsg"); err == nil {
 		cmd := exec.Command("swaymsg", "-t", "get_tree")
 		output, err := cmd.Output()
 		if err == nil {
-			// Parse focused window (simplified - needs proper JSON parsing)
 			_ = output
-			// For now, return error to fallback to fullscreen
 		}
 	}
 
-	// Try Hyprland
 	if _, err := exec.LookPath("hyprctl"); err == nil {
 		cmd := exec.Command("hyprctl", "activewindow", "-j")
 		output, err := cmd.Output()
 		if err == nil {
-			// Parse active window (simplified - needs proper JSON parsing)
 			_ = output
-			// For now, return error to fallback to fullscreen
 		}
 	}
 
 	return "", fmt.Errorf("unable to get active window on Wayland")
 }
 
-// getActiveWindowGeometry get active window geometry for X11
 func getActiveWindowGeometry() (string, string, error) {
-	// Check if xdotool is installed
 	if _, err := exec.LookPath("xdotool"); err != nil {
 		return "", "", fmt.Errorf("xdotool not installed")
 	}
 
-	// Get active window ID
 	cmd := exec.Command("xdotool", "getactivewindow")
 	windowIDBytes, err := cmd.Output()
 	if err != nil {
@@ -317,14 +308,12 @@ func getActiveWindowGeometry() (string, string, error) {
 
 	windowID := strings.TrimSpace(string(windowIDBytes))
 
-	// Get window geometry
 	cmd = exec.Command("xdotool", "getwindowgeometry", "--shell", windowID)
 	output, err := cmd.Output()
 	if err != nil {
 		return "", "", fmt.Errorf("failed to get window geometry")
 	}
 
-	// Parse geometry (WIDTH=1920\nHEIGHT=1080\nX=0\nY=0)
 	lines := strings.Split(string(output), "\n")
 	var width, height, x, y string
 
@@ -346,7 +335,6 @@ func getActiveWindowGeometry() (string, string, error) {
 	return geometry, offset, nil
 }
 
-// stopRecording спира video запис
 func stopRecording(cfg *Config) error {
 	pidFile := "/tmp/ql_videorecord.pid"
 
@@ -367,7 +355,6 @@ func stopRecording(cfg *Config) error {
 
 	outputPath := strings.TrimSpace(lines[1])
 
-	// Изпрати SIGINT за graceful shutdown
 	process, err := os.FindProcess(pid)
 	if err != nil {
 		os.Remove(pidFile)
@@ -375,15 +362,12 @@ func stopRecording(cfg *Config) error {
 	}
 
 	if err := process.Signal(syscall.SIGINT); err != nil {
-		// Process might already be dead
 		os.Remove(pidFile)
 		return fmt.Errorf("failed to stop recording: %w", err)
 	}
 
-	// Изчакай малко за finalization
 	time.Sleep(2 * time.Second)
 
-	// Изтрий PID file
 	os.Remove(pidFile)
 
 	if cfg.ShowNotify {
@@ -393,36 +377,42 @@ func stopRecording(cfg *Config) error {
 	return nil
 }
 
-// getScreenResolution връща screen resolution за X11
 func getScreenResolution() string {
 	cmd := exec.Command("xrandr")
 	output, err := cmd.Output()
 	if err != nil {
-		return "1920x1080" // fallback
+		return "1920x1080"
 	}
 
-	// Parse primary display resolution
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
+	outputStr := string(output)
+	startIdx := 0
+
+	for {
+		lineEnd := strings.IndexByte(outputStr[startIdx:], '\n')
+		if lineEnd == -1 {
+			break
+		}
+
+		line := outputStr[startIdx : startIdx+lineEnd]
+
 		if strings.Contains(line, "*") {
 			fields := strings.Fields(line)
 			if len(fields) > 0 {
 				return fields[0]
 			}
 		}
+
+		startIdx += lineEnd + 1
 	}
 
-	return "1920x1080" // fallback
+	return "1920x1080"
 }
 
-// detectAudioDevice discovers audio device (pulse or pipewire)
 func detectAudioDevice() string {
-	// Check for PipeWire
 	if _, err := exec.LookPath("pw-cli"); err == nil {
-		return "pulse" // PipeWire has pulse compatibility
+		return "pulse"
 	}
 
-	// Check for PulseAudio
 	if _, err := exec.LookPath("pactl"); err == nil {
 		return "pulse"
 	}
@@ -430,9 +420,32 @@ func detectAudioDevice() string {
 	return ""
 }
 
-// notify sends notification
 func notify(title, message string) {
 	if _, err := exec.LookPath("notify-send"); err == nil {
 		exec.Command("notify-send", "ql videorecord", fmt.Sprintf("%s\n%s", title, message)).Run()
+	}
+}
+
+func showErrorNotification(title, message string) {
+	if _, err := exec.LookPath("dunstify"); err == nil {
+		cmd := exec.Command("dunstify",
+			"-u", "critical",
+			"-t", "10000",
+			title,
+			message)
+		cmd.Env = os.Environ()
+		cmd.Start()
+		return
+	}
+
+	if _, err := exec.LookPath("notify-send"); err == nil {
+		cmd := exec.Command("notify-send",
+			"-u", "critical",
+			"-t", "10000",
+			title,
+			message)
+		cmd.Env = os.Environ()
+		cmd.Start()
+		return
 	}
 }

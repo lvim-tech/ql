@@ -24,12 +24,9 @@ func init() {
 	})
 }
 
-// Run executes the weather command
-func Run(ctx commands.LauncherContext) error {
-	// Get config
+func Run(ctx commands.LauncherContext) commands.CommandResult {
 	cfgInterface := ctx.Config().GetWeatherConfig()
 
-	// Decode config
 	var cfg Config
 	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		WeaklyTypedInput: true,
@@ -37,53 +34,59 @@ func Run(ctx commands.LauncherContext) error {
 	})
 	if err != nil {
 		cfg = DefaultConfig()
-	} else if err := decoder.Decode(cfgInterface); err != nil {
-		cfg = DefaultConfig()
+	} else {
+		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
+			cfg = DefaultConfig()
+		}
 	}
 
 	if !cfg.Enabled {
-		return fmt.Errorf("weather module is disabled in config")
+		return commands.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("weather module is disabled in config"),
+		}
 	}
 
-	// If no locations configured, use default
 	if len(cfg.Locations) == 0 {
 		cfg.Locations = []string{"Sofia", "London", "New York"}
 	}
 
-	// Show location menu
-	choice, err := ctx.Show(cfg.Locations, "Weather Location")
-	if err != nil {
-		return err
+	for {
+		var items []string
+		items = append(items, "← Back")
+		items = append(items, cfg.Locations...)
+
+		choice, err := ctx.Show(items, "Weather Location")
+		if err != nil {
+			return commands.CommandResult{Success: false}
+		}
+
+		if choice == "← Back" {
+			return commands.CommandResult{Success: false}
+		}
+
+		notifyID := showPersistentNotification("Weather", fmt.Sprintf("Fetching weather for %s.. .", choice))
+
+		weatherData, err := fetchWeather(choice, cfg.Options, cfg.Timeout)
+
+		closePersistentNotification(notifyID)
+
+		if err != nil {
+			showErrorNotification("Weather Error", fmt.Sprintf("Failed to fetch weather for %s:\n%v", choice, err))
+			continue
+		}
+
+		if isatty() {
+			displayWeatherTerminal(weatherData)
+		} else {
+			displayWeatherGUI(weatherData)
+		}
+
+		return commands.CommandResult{Success: true}
 	}
-
-	// Show persistent notification while fetching
-	notifyID := showPersistentNotification("Weather", fmt.Sprintf("Fetching weather for %s.. .", choice))
-
-	// Fetch weather data
-	weatherData, err := fetchWeather(choice, cfg.Options, cfg.Timeout)
-
-	// Close the persistent notification
-	closePersistentNotification(notifyID)
-
-	if err != nil {
-		// Show error notification (stays for 10 seconds)
-		showErrorNotification("Weather Error", fmt.Sprintf("Failed to fetch weather for %s:\n%v", choice, err))
-		return fmt.Errorf("failed to fetch weather: %w", err)
-	}
-
-	// Auto-detect display method based on TTY
-	if isatty() {
-		// We have a terminal - show there
-		return displayWeatherTerminal(weatherData)
-	}
-
-	// No terminal (launched from hotkey) - use GUI
-	return displayWeatherGUI(weatherData)
 }
 
-// isatty checks if we're running in an interactive terminal
 func isatty() bool {
-	// Check if stdin is a terminal
 	stdinInfo, err := os.Stdin.Stat()
 	if err != nil {
 		return false
@@ -94,10 +97,8 @@ func isatty() bool {
 		return false
 	}
 
-	// Try to open /dev/tty - if this fails, we're not in an interactive session
 	tty, err := os.Open("/dev/tty")
 	if err != nil {
-		// No controlling terminal = launched from GUI/hotkey
 		return false
 	}
 	tty.Close()
@@ -105,18 +106,14 @@ func isatty() bool {
 	return true
 }
 
-// showPersistentNotification shows a notification that stays until closed
-// Returns a notification ID that can be used to close it
 func showPersistentNotification(title, message string) int {
-	// Generate unique ID
 	notifyID := int(time.Now().UnixNano() % 1000000)
 
-	// Try dunstify (supports replace-id for persistent notifications)
 	if _, err := exec.LookPath("dunstify"); err == nil {
 		cmd := exec.Command("dunstify",
 			"-u", "normal",
-			"-t", "0", // 0 = never expire
-			"-r", strconv.Itoa(notifyID), // Replace ID as string
+			"-t", "0",
+			"-r", strconv.Itoa(notifyID),
 			title,
 			message)
 		cmd.Env = os.Environ()
@@ -124,11 +121,10 @@ func showPersistentNotification(title, message string) int {
 		return notifyID
 	}
 
-	// Fallback to notify-send (no replace support, but works)
 	if _, err := exec.LookPath("notify-send"); err == nil {
 		cmd := exec.Command("notify-send",
 			"-u", "normal",
-			"-t", "0", // 0 = never expire (may not work on all notification daemons)
+			"-t", "0",
 			title,
 			message)
 		cmd.Env = os.Environ()
@@ -139,27 +135,20 @@ func showPersistentNotification(title, message string) int {
 	return notifyID
 }
 
-// closePersistentNotification closes a persistent notification
 func closePersistentNotification(notifyID int) {
-	// Try dunstify close
 	if _, err := exec.LookPath("dunstify"); err == nil {
-		// Close notification with ID
 		cmd := exec.Command("dunstify", "-C", strconv.Itoa(notifyID))
 		cmd.Env = os.Environ()
 		cmd.Run()
 		return
 	}
-
-	// notify-send doesn't support closing, notification will timeout naturally
 }
 
-// showErrorNotification shows an error notification (stays for 10 seconds)
 func showErrorNotification(title, message string) {
-	// Try dunstify first
 	if _, err := exec.LookPath("dunstify"); err == nil {
 		cmd := exec.Command("dunstify",
 			"-u", "critical",
-			"-t", "10000", // 10 seconds
+			"-t", "10000",
 			title,
 			message)
 		cmd.Env = os.Environ()
@@ -167,11 +156,10 @@ func showErrorNotification(title, message string) {
 		return
 	}
 
-	// Fallback to notify-send
 	if _, err := exec.LookPath("notify-send"); err == nil {
 		cmd := exec.Command("notify-send",
 			"-u", "critical",
-			"-t", "10000", // 10 seconds
+			"-t", "10000",
 			title,
 			message)
 		cmd.Env = os.Environ()
@@ -181,35 +169,28 @@ func showErrorNotification(title, message string) {
 }
 
 func fetchWeather(location string, options string, timeout int) (string, error) {
-	// Replace spaces with %20 for URL
 	location = strings.ReplaceAll(location, " ", "%20")
 
-	// Build URL with options
 	url := fmt.Sprintf("https://wttr.in/%s?T", location)
 	if options != "" {
 		url += "&" + options
 	}
 
-	// Create HTTP request with curl User-Agent
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Set User-Agent to curl (forces plain text response)
 	req.Header.Set("User-Agent", "curl/7.88.0")
 
-	// Default timeout if not specified
 	if timeout == 0 {
 		timeout = 30
 	}
 
-	// Create HTTP client with timeout
 	client := &http.Client{
 		Timeout: time.Duration(timeout) * time.Second,
 	}
 
-	// Fetch weather data
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("network error: %w", err)
@@ -220,7 +201,6 @@ func fetchWeather(location string, options string, timeout int) (string, error) 
 		return "", fmt.Errorf("server returned status %d", resp.StatusCode)
 	}
 
-	// Read response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read response: %w", err)
@@ -230,16 +210,13 @@ func fetchWeather(location string, options string, timeout int) (string, error) 
 }
 
 func displayWeatherTerminal(data string) error {
-	// Simply print to stdout
 	fmt.Println(data)
 	return nil
 }
 
 func displayWeatherGUI(data string) error {
-	// 1. Try yad (best for large text)
 	if _, err := exec.LookPath("yad"); err == nil {
-		// Write data to temp file (more reliable than stdin pipe)
-		tmpFile := "/tmp/ql-weather-data. txt"
+		tmpFile := "/tmp/ql-weather-data.txt"
 		if err := os.WriteFile(tmpFile, []byte(data), 0644); err == nil {
 			defer os.Remove(tmpFile)
 
@@ -255,7 +232,6 @@ func displayWeatherGUI(data string) error {
 		}
 	}
 
-	// 2. Try zenity
 	if _, err := exec.LookPath("zenity"); err == nil {
 		tmpFile := "/tmp/ql-weather-data.txt"
 		if err := os.WriteFile(tmpFile, []byte(data), 0644); err == nil {
@@ -272,7 +248,6 @@ func displayWeatherGUI(data string) error {
 		}
 	}
 
-	// 3. Try opening in auto-detected terminal emulator
 	terminal := detectTerminal()
 	if terminal != "" {
 		tmpScript := "/tmp/ql-weather. sh"
@@ -284,12 +259,10 @@ func displayWeatherGUI(data string) error {
 		}
 	}
 
-	// 4. Fallback:  print to stdout
 	return displayWeatherTerminal(data)
 }
 
 func detectTerminal() string {
-	// Check common terminal emulators
 	terminals := []string{
 		"kitty",
 		"alacritty",
