@@ -1,56 +1,100 @@
-# ql - Quick Launch Default Configuration
-# Copy this to ~/. config/ql/config.toml to customize
-
-# Default launcher (if no flag specified)
+# Default launcher (rofi, dmenu, fzf, bemenu, fuzzel)
 default_launcher = "rofi"
 
 # Launcher configurations
-[launchers.dmenu]
-command = "dmenu"
-args = ["-i", "-l", "20"]
-
 [launchers.rofi]
-command = "rofi"
-args = ["-dmenu", "-i"]
+args = ["-dmenu", "-i", "-p"]
+
+[launchers.dmenu]
+args = ["-i", "-l", "10"]
 
 [launchers.fzf]
-command = "fzf"
-args = ["--height", "40%", "--reverse", "--border"]
+args = ["--reverse", "--height=40%"]
 
 [launchers.bemenu]
-command = "bemenu"
-args = ["-i", "-l", "20"]
+args = ["-i", "-l", "10"]
 
 [launchers.fuzzel]
-command = "fuzzel"
 args = ["--dmenu"]
 
-# Command-specific settings
+# Power management module
 [commands.power]
 enabled = true
-
-# Show options
 show_logout = true
 show_suspend = true
-show_hibernate = false
+show_hibernate = true
 show_reboot = true
 show_shutdown = true
-
-# Confirm options
-confirm_logout = true
+confirm_logout = false
 confirm_suspend = false
 confirm_hibernate = true
 confirm_reboot = true
 confirm_shutdown = true
-
-# Custom commands
 logout_command = "loginctl terminate-user $USER"
 suspend_command = "systemctl suspend"
 hibernate_command = "systemctl hibernate"
 reboot_command = "systemctl reboot"
 shutdown_command = "systemctl poweroff"
 
+# Screenshot module
 [commands.screenshot]
 enabled = true
 save_dir = "~/Pictures/Screenshots"
 file_prefix = "screenshot"
+
+# Radio module
+[commands.radio]
+enabled = true
+volume = 70
+
+[commands.radio.stations]
+"Jazz FM" = "http://live.musictradio.com/JazzFMHigh"
+"Smooth FM" = "http://live.musictradio.com/SmoothFMHigh"
+"Classic FM" = "http://media-ice.musicradio.com/ClassicFMMP3"
+
+# WiFi module
+[commands.wifi]
+enabled = true
+test_host = "8.8.8.8"
+test_count = 3
+test_wait = 2
+show_notify = true
+
+# MPC module
+[commands.mpc]
+enabled = true
+current_playlist_cache = "~/.cache/ql_current_playlist"
+
+# Audio Record module
+[commands.audiorecord]
+enabled = true
+save_dir = "~/Music/Recordings"
+file_prefix = "audio"
+format = "mp3"
+quality = "2"
+
+# Video Record module
+[commands.videorecord]
+enabled = true
+save_dir = "~/Videos/Recordings"
+file_prefix = "screencast"
+format = "mp4"
+quality = "23"                   # CRF:  0=lossless, 18=visually lossless, 23=default, 28=lower quality
+record_audio = true
+show_notify = true
+
+# X11 specific settings (ffmpeg)
+[commands.videorecord.x11]
+framerate = 60          # Input framerate (30, 60)
+output_fps = 30         # Output framerate (15, 30, 60)
+preset = "ultrafast"    # ultrafast, fast, medium, slow, veryslow
+video_codec = "libx264" # libx264, libx265, h264
+audio_codec = "aac"     # aac, mp3, flac
+
+# Wayland specific settings (wf-recorder)
+[commands.videorecord.wayland]
+framerate = 60          # Input framerate (30, 60)
+output_fps = 30         # Output framerate (15, 30, 60)
+preset = "ultrafast"    # ultrafast, fast, medium, slow
+video_codec = "libx264" # libx264, h264_vaapi (hardware accel)
+audio_codec = "aac"     # aac, opus, flac

@@ -1,10 +1,13 @@
 // Package config provides configuration management for ql.
 // It handles loading, merging, and accessing configuration from default and user config files.
+// Configuration can be loaded from embedded defaults, user config (~/.config/ql/config. toml),
+// or system config (/etc/ql/config. toml), with user settings overriding defaults.
 package config
 
 import (
 	_ "embed"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 
@@ -21,46 +24,30 @@ type Config struct {
 	Commands        CommandsConfig `toml:"commands"`
 }
 
-// LauncherConfig за всеки launcher
-type LauncherConfig struct {
-	Dmenu  LauncherCommand `toml:"dmenu"`
-	Rofi   LauncherCommand `toml:"rofi"`
-	Fzf    LauncherCommand `toml:"fzf"`
-	Bemenu LauncherCommand `toml:"bemenu"`
-	Fuzzel LauncherCommand `toml:"fuzzel"`
-}
-
-// LauncherCommand описва как да се стартира launcher
-type LauncherCommand struct {
-	Command string   `toml:"command"`
-	Args    []string `toml:"args"`
-}
-
 // CommandsConfig за всички команди
 type CommandsConfig struct {
-	Power      PowerConfig      `toml:"power"`
-	Screenshot ScreenshotConfig `toml:"screenshot"`
+	Power       PowerConfig       `toml:"power"`
+	Screenshot  ScreenshotConfig  `toml:"screenshot"`
+	Radio       RadioConfig       `toml:"radio"`
+	Wifi        WifiConfig        `toml:"wifi"`
+	Mpc         MpcConfig         `toml:"mpc"`
+	AudioRecord AudioRecordConfig `toml:"audiorecord"`
+	VideoRecord VideoRecordConfig `toml:"videorecord"`
 }
 
 // PowerConfig за power management
 type PowerConfig struct {
-	Enabled bool `toml:"enabled"`
-
-	// Show options
-	ShowLogout    bool `toml:"show_logout"`
-	ShowSuspend   bool `toml:"show_suspend"`
-	ShowHibernate bool `toml:"show_hibernate"`
-	ShowReboot    bool `toml:"show_reboot"`
-	ShowShutdown  bool `toml:"show_shutdown"`
-
-	// Confirm options
-	ConfirmLogout    bool `toml:"confirm_logout"`
-	ConfirmSuspend   bool `toml:"confirm_suspend"`
-	ConfirmHibernate bool `toml:"confirm_hibernate"`
-	ConfirmReboot    bool `toml:"confirm_reboot"`
-	ConfirmShutdown  bool `toml:"confirm_shutdown"`
-
-	// Custom commands
+	Enabled          bool   `toml:"enabled"`
+	ShowLogout       bool   `toml:"show_logout"`
+	ShowSuspend      bool   `toml:"show_suspend"`
+	ShowHibernate    bool   `toml:"show_hibernate"`
+	ShowReboot       bool   `toml:"show_reboot"`
+	ShowShutdown     bool   `toml:"show_shutdown"`
+	ConfirmLogout    bool   `toml:"confirm_logout"`
+	ConfirmSuspend   bool   `toml:"confirm_suspend"`
+	ConfirmHibernate bool   `toml:"confirm_hibernate"`
+	ConfirmReboot    bool   `toml:"confirm_reboot"`
+	ConfirmShutdown  bool   `toml:"confirm_shutdown"`
 	LogoutCommand    string `toml:"logout_command"`
 	SuspendCommand   string `toml:"suspend_command"`
 	HibernateCommand string `toml:"hibernate_command"`
@@ -75,25 +62,94 @@ type ScreenshotConfig struct {
 	FilePrefix string `toml:"file_prefix"`
 }
 
-// PowerConfigFile е за четене от TOML (с pointers за optional полета)
+// RadioConfig за radio
+type RadioConfig struct {
+	Enabled       bool              `toml:"enabled"`
+	Volume        int               `toml:"volume"`
+	RadioStations map[string]string `toml:"stations"`
+}
+
+// WifiConfig за wifi
+type WifiConfig struct {
+	Enabled    bool   `toml:"enabled"`
+	TestHost   string `toml:"test_host"`
+	TestCount  int    `toml:"test_count"`
+	TestWait   int    `toml:"test_wait"`
+	ShowNotify bool   `toml:"show_notify"`
+}
+
+// MpcConfig за mpc
+type MpcConfig struct {
+	Enabled              bool   `toml:"enabled"`
+	CurrentPlaylistCache string `toml:"current_playlist_cache"`
+}
+
+// AudioRecordConfig за audio recording
+type AudioRecordConfig struct {
+	Enabled    bool   `toml:"enabled"`
+	SaveDir    string `toml:"save_dir"`
+	FilePrefix string `toml:"file_prefix"`
+	Format     string `toml:"format"`
+	Quality    string `toml:"quality"`
+}
+
+// VideoRecordConfig за video recording
+type VideoRecordConfig struct {
+	Enabled     bool   `toml:"enabled"`
+	SaveDir     string `toml:"save_dir"`
+	FilePrefix  string `toml:"file_prefix"`
+	Format      string `toml:"format"`
+	Quality     string `toml:"quality"`
+	RecordAudio bool   `toml:"record_audio"`
+	ShowNotify  bool   `toml:"show_notify"`
+
+	// Platform specific settings
+	X11     VideoRecordX11Config     `toml:"x11"`
+	Wayland VideoRecordWaylandConfig `toml:"wayland"`
+}
+
+// VideoRecordX11Config за X11 specific settings
+type VideoRecordX11Config struct {
+	Framerate  int    `toml:"framerate"`
+	OutputFPS  int    `toml:"output_fps"`
+	Preset     string `toml:"preset"`
+	VideoCodec string `toml:"video_codec"`
+	AudioCodec string `toml:"audio_codec"`
+}
+
+// VideoRecordWaylandConfig за Wayland specific settings
+type VideoRecordWaylandConfig struct {
+	Framerate  int    `toml:"framerate"`
+	OutputFPS  int    `toml:"output_fps"`
+	Preset     string `toml:"preset"`
+	VideoCodec string `toml:"video_codec"`
+	AudioCodec string `toml:"audio_codec"`
+}
+
+// CommandsConfigFile за четене от TOML
+type CommandsConfigFile struct {
+	Power       PowerConfigFile       `toml:"power"`
+	Screenshot  ScreenshotConfigFile  `toml:"screenshot"`
+	Radio       RadioConfigFile       `toml:"radio"`
+	Wifi        WifiConfigFile        `toml:"wifi"`
+	Mpc         MpcConfigFile         `toml:"mpc"`
+	AudioRecord AudioRecordConfigFile `toml:"audiorecord"`
+	VideoRecord VideoRecordConfigFile `toml:"videorecord"`
+}
+
+// PowerConfigFile с pointers
 type PowerConfigFile struct {
-	Enabled *bool `toml:"enabled"`
-
-	// Show options
-	ShowLogout    *bool `toml:"show_logout"`
-	ShowSuspend   *bool `toml:"show_suspend"`
-	ShowHibernate *bool `toml:"show_hibernate"`
-	ShowReboot    *bool `toml:"show_reboot"`
-	ShowShutdown  *bool `toml:"show_shutdown"`
-
-	// Confirm options
-	ConfirmLogout    *bool `toml:"confirm_logout"`
-	ConfirmSuspend   *bool `toml:"confirm_suspend"`
-	ConfirmHibernate *bool `toml:"confirm_hibernate"`
-	ConfirmReboot    *bool `toml:"confirm_reboot"`
-	ConfirmShutdown  *bool `toml:"confirm_shutdown"`
-
-	// Custom commands
+	Enabled          *bool   `toml:"enabled"`
+	ShowLogout       *bool   `toml:"show_logout"`
+	ShowSuspend      *bool   `toml:"show_suspend"`
+	ShowHibernate    *bool   `toml:"show_hibernate"`
+	ShowReboot       *bool   `toml:"show_reboot"`
+	ShowShutdown     *bool   `toml:"show_shutdown"`
+	ConfirmLogout    *bool   `toml:"confirm_logout"`
+	ConfirmSuspend   *bool   `toml:"confirm_suspend"`
+	ConfirmHibernate *bool   `toml:"confirm_hibernate"`
+	ConfirmReboot    *bool   `toml:"confirm_reboot"`
+	ConfirmShutdown  *bool   `toml:"confirm_shutdown"`
 	LogoutCommand    *string `toml:"logout_command"`
 	SuspendCommand   *string `toml:"suspend_command"`
 	HibernateCommand *string `toml:"hibernate_command"`
@@ -101,17 +157,75 @@ type PowerConfigFile struct {
 	ShutdownCommand  *string `toml:"shutdown_command"`
 }
 
-// ScreenshotConfigFile е за четене от TOML
+// ScreenshotConfigFile с pointers
 type ScreenshotConfigFile struct {
 	Enabled    *bool   `toml:"enabled"`
 	SaveDir    *string `toml:"save_dir"`
 	FilePrefix *string `toml:"file_prefix"`
 }
 
-// CommandsConfigFile за четене от TOML
-type CommandsConfigFile struct {
-	Power      PowerConfigFile      `toml:"power"`
-	Screenshot ScreenshotConfigFile `toml:"screenshot"`
+// RadioConfigFile с pointers
+type RadioConfigFile struct {
+	Enabled       *bool             `toml:"enabled"`
+	Volume        *int              `toml:"volume"`
+	RadioStations map[string]string `toml:"stations"`
+}
+
+// WifiConfigFile с pointers
+type WifiConfigFile struct {
+	Enabled    *bool   `toml:"enabled"`
+	TestHost   *string `toml:"test_host"`
+	TestCount  *int    `toml:"test_count"`
+	TestWait   *int    `toml:"test_wait"`
+	ShowNotify *bool   `toml:"show_notify"`
+}
+
+// MpcConfigFile с pointers
+type MpcConfigFile struct {
+	Enabled              *bool   `toml:"enabled"`
+	CurrentPlaylistCache *string `toml:"current_playlist_cache"`
+}
+
+// AudioRecordConfigFile с pointers
+type AudioRecordConfigFile struct {
+	Enabled    *bool   `toml:"enabled"`
+	SaveDir    *string `toml:"save_dir"`
+	FilePrefix *string `toml:"file_prefix"`
+	Format     *string `toml:"format"`
+	Quality    *string `toml:"quality"`
+}
+
+// VideoRecordConfigFile с pointers
+type VideoRecordConfigFile struct {
+	Enabled     *bool   `toml:"enabled"`
+	SaveDir     *string `toml:"save_dir"`
+	FilePrefix  *string `toml:"file_prefix"`
+	Format      *string `toml:"format"`
+	Quality     *string `toml:"quality"`
+	RecordAudio *bool   `toml:"record_audio"`
+	ShowNotify  *bool   `toml:"show_notify"`
+
+	// Platform specific settings
+	X11     VideoRecordX11ConfigFile     `toml:"x11"`
+	Wayland VideoRecordWaylandConfigFile `toml:"wayland"`
+}
+
+// VideoRecordX11ConfigFile с pointers
+type VideoRecordX11ConfigFile struct {
+	Framerate  *int    `toml:"framerate"`
+	OutputFPS  *int    `toml:"output_fps"`
+	Preset     *string `toml:"preset"`
+	VideoCodec *string `toml:"video_codec"`
+	AudioCodec *string `toml:"audio_codec"`
+}
+
+// VideoRecordWaylandConfigFile с pointers
+type VideoRecordWaylandConfigFile struct {
+	Framerate  *int    `toml:"framerate"`
+	OutputFPS  *int    `toml:"output_fps"`
+	Preset     *string `toml:"preset"`
+	VideoCodec *string `toml:"video_codec"`
+	AudioCodec *string `toml:"audio_codec"`
 }
 
 // ConfigFile е за четене от TOML файл
@@ -206,39 +320,25 @@ func mergeConfigs(defaultCfg *Config, userCfg *ConfigFile) *Config {
 	}
 
 	// Merge launcher configs
-	if userCfg.Launchers.Dmenu.Command != "" {
-		merged.Launchers.Dmenu = userCfg.Launchers.Dmenu
-	}
-	if userCfg.Launchers.Rofi.Command != "" {
-		merged.Launchers.Rofi = userCfg.Launchers.Rofi
-	}
-	if userCfg.Launchers.Fzf.Command != "" {
-		merged.Launchers.Fzf = userCfg.Launchers.Fzf
-	}
-	if userCfg.Launchers.Bemenu.Command != "" {
-		merged.Launchers.Bemenu = userCfg.Launchers.Bemenu
-	}
-	if userCfg.Launchers.Fuzzel.Command != "" {
-		merged.Launchers.Fuzzel = userCfg.Launchers.Fuzzel
-	}
+	mergeLauncherConfigs(&merged.Launchers, &userCfg.Launchers)
 
-	// Merge Power settings
+	// Merge command settings
 	mergePowerConfig(&merged.Commands.Power, &userCfg.Commands.Power)
-
-	// Merge Screenshot settings
 	mergeScreenshotConfig(&merged.Commands.Screenshot, &userCfg.Commands.Screenshot)
+	mergeRadioConfig(&merged.Commands.Radio, &userCfg.Commands.Radio)
+	mergeWifiConfig(&merged.Commands.Wifi, &userCfg.Commands.Wifi)
+	mergeMpcConfig(&merged.Commands.Mpc, &userCfg.Commands.Mpc)
+	mergeAudioRecordConfig(&merged.Commands.AudioRecord, &userCfg.Commands.AudioRecord)
+	mergeVideoRecordConfig(&merged.Commands.VideoRecord, &userCfg.Commands.VideoRecord)
 
 	return &merged
 }
 
 // mergePowerConfig мерджва power конфигурация
 func mergePowerConfig(merged *PowerConfig, user *PowerConfigFile) {
-	// Enabled
 	if user.Enabled != nil {
 		merged.Enabled = *user.Enabled
 	}
-
-	// Show options
 	if user.ShowLogout != nil {
 		merged.ShowLogout = *user.ShowLogout
 	}
@@ -254,8 +354,6 @@ func mergePowerConfig(merged *PowerConfig, user *PowerConfigFile) {
 	if user.ShowShutdown != nil {
 		merged.ShowShutdown = *user.ShowShutdown
 	}
-
-	// Confirm options
 	if user.ConfirmLogout != nil {
 		merged.ConfirmLogout = *user.ConfirmLogout
 	}
@@ -271,8 +369,6 @@ func mergePowerConfig(merged *PowerConfig, user *PowerConfigFile) {
 	if user.ConfirmShutdown != nil {
 		merged.ConfirmShutdown = *user.ConfirmShutdown
 	}
-
-	// Commands
 	if user.LogoutCommand != nil && *user.LogoutCommand != "" {
 		merged.LogoutCommand = *user.LogoutCommand
 	}
@@ -292,16 +388,144 @@ func mergePowerConfig(merged *PowerConfig, user *PowerConfigFile) {
 
 // mergeScreenshotConfig мерджва screenshot конфигурация
 func mergeScreenshotConfig(merged *ScreenshotConfig, user *ScreenshotConfigFile) {
-	// Enabled
 	if user.Enabled != nil {
 		merged.Enabled = *user.Enabled
 	}
-
 	if user.SaveDir != nil && *user.SaveDir != "" {
 		merged.SaveDir = *user.SaveDir
 	}
 	if user.FilePrefix != nil && *user.FilePrefix != "" {
 		merged.FilePrefix = *user.FilePrefix
+	}
+}
+
+// mergeRadioConfig мерджва radio конфигурация
+func mergeRadioConfig(merged *RadioConfig, user *RadioConfigFile) {
+	if user.Enabled != nil {
+		merged.Enabled = *user.Enabled
+	}
+	if user.Volume != nil {
+		merged.Volume = *user.Volume
+	}
+	if len(user.RadioStations) > 0 {
+		maps.Copy(merged.RadioStations, user.RadioStations)
+	}
+}
+
+// mergeWifiConfig мерджва wifi конфигурация
+func mergeWifiConfig(merged *WifiConfig, user *WifiConfigFile) {
+	if user.Enabled != nil {
+		merged.Enabled = *user.Enabled
+	}
+	if user.TestHost != nil && *user.TestHost != "" {
+		merged.TestHost = *user.TestHost
+	}
+	if user.TestCount != nil {
+		merged.TestCount = *user.TestCount
+	}
+	if user.TestWait != nil {
+		merged.TestWait = *user.TestWait
+	}
+	if user.ShowNotify != nil {
+		merged.ShowNotify = *user.ShowNotify
+	}
+}
+
+// mergeMpcConfig мерджва mpc конфигурация
+func mergeMpcConfig(merged *MpcConfig, user *MpcConfigFile) {
+	if user.Enabled != nil {
+		merged.Enabled = *user.Enabled
+	}
+	if user.CurrentPlaylistCache != nil && *user.CurrentPlaylistCache != "" {
+		merged.CurrentPlaylistCache = *user.CurrentPlaylistCache
+	}
+}
+
+// mergeAudioRecordConfig мерджва audiorecord конфигурация
+func mergeAudioRecordConfig(merged *AudioRecordConfig, user *AudioRecordConfigFile) {
+	if user.Enabled != nil {
+		merged.Enabled = *user.Enabled
+	}
+	if user.SaveDir != nil && *user.SaveDir != "" {
+		merged.SaveDir = *user.SaveDir
+	}
+	if user.FilePrefix != nil && *user.FilePrefix != "" {
+		merged.FilePrefix = *user.FilePrefix
+	}
+	if user.Format != nil && *user.Format != "" {
+		merged.Format = *user.Format
+	}
+	if user.Quality != nil && *user.Quality != "" {
+		merged.Quality = *user.Quality
+	}
+}
+
+// mergeVideoRecordConfig мерджва videorecord конфигурация
+func mergeVideoRecordConfig(merged *VideoRecordConfig, user *VideoRecordConfigFile) {
+	if user.Enabled != nil {
+		merged.Enabled = *user.Enabled
+	}
+	if user.SaveDir != nil && *user.SaveDir != "" {
+		merged.SaveDir = *user.SaveDir
+	}
+	if user.FilePrefix != nil && *user.FilePrefix != "" {
+		merged.FilePrefix = *user.FilePrefix
+	}
+	if user.Format != nil && *user.Format != "" {
+		merged.Format = *user.Format
+	}
+	if user.Quality != nil && *user.Quality != "" {
+		merged.Quality = *user.Quality
+	}
+	if user.RecordAudio != nil {
+		merged.RecordAudio = *user.RecordAudio
+	}
+	if user.ShowNotify != nil {
+		merged.ShowNotify = *user.ShowNotify
+	}
+
+	// Merge X11 settings
+	mergeVideoRecordX11Config(&merged.X11, &user.X11)
+
+	// Merge Wayland settings
+	mergeVideoRecordWaylandConfig(&merged.Wayland, &user.Wayland)
+}
+
+// mergeVideoRecordX11Config мерджва X11 конфигурация
+func mergeVideoRecordX11Config(merged *VideoRecordX11Config, user *VideoRecordX11ConfigFile) {
+	if user.Framerate != nil {
+		merged.Framerate = *user.Framerate
+	}
+	if user.OutputFPS != nil {
+		merged.OutputFPS = *user.OutputFPS
+	}
+	if user.Preset != nil && *user.Preset != "" {
+		merged.Preset = *user.Preset
+	}
+	if user.VideoCodec != nil && *user.VideoCodec != "" {
+		merged.VideoCodec = *user.VideoCodec
+	}
+	if user.AudioCodec != nil && *user.AudioCodec != "" {
+		merged.AudioCodec = *user.AudioCodec
+	}
+}
+
+// mergeVideoRecordWaylandConfig мерджва Wayland конфигурация
+func mergeVideoRecordWaylandConfig(merged *VideoRecordWaylandConfig, user *VideoRecordWaylandConfigFile) {
+	if user.Framerate != nil {
+		merged.Framerate = *user.Framerate
+	}
+	if user.OutputFPS != nil {
+		merged.OutputFPS = *user.OutputFPS
+	}
+	if user.Preset != nil && *user.Preset != "" {
+		merged.Preset = *user.Preset
+	}
+	if user.VideoCodec != nil && *user.VideoCodec != "" {
+		merged.VideoCodec = *user.VideoCodec
+	}
+	if user.AudioCodec != nil && *user.AudioCodec != "" {
+		merged.AudioCodec = *user.AudioCodec
 	}
 }
 
@@ -311,24 +535,6 @@ func Get() *Config {
 		globalConfig, _ = Load()
 	}
 	return globalConfig
-}
-
-// GetLauncherCommand връща команда за конкретен launcher
-func (c *Config) GetLauncherCommand(name string) *LauncherCommand {
-	switch name {
-	case "dmenu":
-		return &c.Launchers.Dmenu
-	case "rofi":
-		return &c.Launchers.Rofi
-	case "fzf":
-		return &c.Launchers.Fzf
-	case "bemenu":
-		return &c.Launchers.Bemenu
-	case "fuzzel":
-		return &c.Launchers.Fuzzel
-	default:
-		return nil
-	}
 }
 
 // InitUserConfig копира default config в user config директорията

@@ -2,8 +2,6 @@
 package hub
 
 import (
-	"fmt"
-
 	"github.com/lvim-tech/ql/pkg/commands"
 	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/launcher"
@@ -12,69 +10,53 @@ import (
 func init() {
 	commands.Register(commands.Command{
 		Name:        "hub",
-		Description: "Main command hub",
+		Description: "Main command menu",
 		Run:         Run,
 	})
 }
 
-// Run показва главното меню с всички команди
 func Run(ctx *launcher.Context) error {
 	cfg := config.Get()
 
-	// Вземи всички регистрирани команди
-	allCommands := commands.List()
-
-	// Филтрирай само enabled команди (без hub и test)
-	var availableCommands []commands.Command
-	for _, cmd := range allCommands {
-		// Skip hub и test
-		if cmd.Name == "hub" || cmd.Name == "test" {
+	// Събери всички enabled команди (без hub)
+	var options []string
+	for _, cmd := range commands.List() {
+		if cmd.Name == "hub" {
 			continue
 		}
 
-		// Провери дали е enabled в config
+		// Провери дали е enabled
 		if !isCommandEnabled(cfg, cmd.Name) {
 			continue
 		}
 
-		availableCommands = append(availableCommands, cmd)
-	}
-
-	if len(availableCommands) == 0 {
-		return fmt.Errorf("no commands available (check your config)")
-	}
-
-	// Подготви опции за меню
-	var options []string
-	for _, cmd := range availableCommands {
 		options = append(options, cmd.Name)
 	}
 
 	// Покажи меню
-	choice, err := ctx.Show(options, "Select Command")
+	choice, err := ctx.Show(options, "ql")
 	if err != nil {
 		return err
 	}
 
-	// Намери и изпълни избраната команда
-	for _, cmd := range availableCommands {
-		if cmd.Name == choice {
-			return cmd.Run(ctx)
-		}
+	// Изпълни избраната команда
+	cmd := commands.Find(choice)
+	if cmd == nil {
+		return launcher.ErrCancelled
 	}
 
-	return fmt.Errorf("command not found: %s", choice)
+	return cmd.Run(ctx)
 }
 
-// isCommandEnabled проверява дали команда е enabled в config
 func isCommandEnabled(cfg *config.Config, cmdName string) bool {
 	switch cmdName {
 	case "power":
 		return cfg.Commands.Power.Enabled
 	case "screenshot":
 		return cfg.Commands.Screenshot.Enabled
+	case "radio":
+		return cfg.Commands.Radio.Enabled
 	default:
-		// По default всички команди са enabled
 		return true
 	}
 }
