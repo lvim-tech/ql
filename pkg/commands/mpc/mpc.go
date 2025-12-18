@@ -13,6 +13,8 @@ import (
 	"github.com/mitchellh/mapstructure"
 )
 
+var mpcPath string
+
 func init() {
 	commands.Register(commands.Command{
 		Name:        "mpc",
@@ -44,10 +46,37 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 	}
 
-	if _, err := exec.LookPath("mpc"); err != nil {
+	// Check if mpc exists in PATH
+	mpcPath, err = exec.LookPath("mpc")
+	if err != nil {
 		return commands.CommandResult{
 			Success: false,
-			Error:   fmt.Errorf("mpc is not installed"),
+			Error:   fmt.Errorf("mpc is not installed or not in PATH"),
+		}
+	}
+
+	// Setup MPD connection from config
+	if err := setupMpdConnection(&cfg); err != nil {
+		return commands.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("MPD setup failed: %w", err),
+		}
+	}
+
+	// Test connection
+	testCmd := exec.Command(mpcPath, "status")
+	output, err := testCmd.CombinedOutput()
+	if err != nil {
+		errMsg := strings.TrimSpace(string(output))
+		if errMsg == "" {
+			errMsg = err.Error()
+		}
+		return commands.CommandResult{
+			Success: false,
+			Error: fmt.Errorf("MPD connection failed: %s\n\nConnection:  %s\nMPD_HOST: %s",
+				errMsg,
+				cfg.ConnectionType,
+				os.Getenv("MPD_HOST")),
 		}
 	}
 
@@ -102,28 +131,134 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 	}
 }
 
+func setupMpdConnection(cfg *Config) error {
+	// Set XDG_RUNTIME_DIR if not set
+	if os.Getenv("XDG_RUNTIME_DIR") == "" {
+		uid := os.Getuid()
+		os.Setenv("XDG_RUNTIME_DIR", fmt.Sprintf("/run/user/%d", uid))
+	}
+
+	// Setup based on connection type
+	switch strings.ToLower(cfg.ConnectionType) {
+	case "socket":
+		socketPath := cfg.Socket
+
+		// Expand tilde
+		if strings.HasPrefix(socketPath, "~/") {
+			home := os.Getenv("HOME")
+			socketPath = filepath.Join(home, socketPath[2:])
+		}
+
+		// Check if socket exists
+		if _, err := os.Stat(socketPath); err != nil {
+			return fmt.Errorf("socket not found: %s", socketPath)
+		}
+
+		os.Setenv("MPD_HOST", socketPath)
+
+	case "tcp":
+		if cfg.Host == "" {
+			return fmt.Errorf("host not specified in config")
+		}
+
+		mpdHost := cfg.Host
+
+		// Add password if provided
+		if cfg.Password != "" {
+			mpdHost = cfg.Password + "@" + mpdHost
+		}
+
+		os.Setenv("MPD_HOST", mpdHost)
+
+		if cfg.Port != "" {
+			os.Setenv("MPD_PORT", cfg.Port)
+		} else {
+			os.Setenv("MPD_PORT", "6600")
+		}
+
+	default:
+		return fmt.Errorf("invalid connection_type: %s (must be 'tcp' or 'socket')", cfg.ConnectionType)
+	}
+
+	return nil
+}
+
 func togglePlayPause() error {
-	cmd := exec.Command("mpc", "toggle")
-	return cmd.Run()
+	cmd := exec.Command(mpcPath, "toggle")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("toggle failed: %s", strings.TrimSpace(string(output)))
+	}
+
+	// Get current status and show notification
+	statusCmd := exec.Command(mpcPath, "status")
+	statusOutput, _ := statusCmd.Output()
+	statusLines := strings.Split(string(statusOutput), "\n")
+
+	if len(statusLines) > 1 {
+		// Check if playing or paused
+		if strings.Contains(statusLines[1], "[playing]") {
+			notify("MPC", "Playing")
+		} else if strings.Contains(statusLines[1], "[paused]") {
+			notify("MPC", "Paused")
+		}
+	}
+
+	return nil
 }
 
 func next() error {
-	cmd := exec.Command("mpc", "next")
-	return cmd.Run()
+	cmd := exec.Command(mpcPath, "next")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("next failed: %s", strings.TrimSpace(string(output)))
+	}
+
+	// Show current song after next
+	currentCmd := exec.Command(mpcPath, "current", "-f", "%artist% - %title%")
+	currentOutput, _ := currentCmd.Output()
+	current := strings.TrimSpace(string(currentOutput))
+
+	if current != "" {
+		notify("MPC - Next", current)
+	}
+
+	return nil
 }
 
 func previous() error {
-	cmd := exec.Command("mpc", "prev")
-	return cmd.Run()
+	cmd := exec.Command(mpcPath, "prev")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("prev failed: %s", strings.TrimSpace(string(output)))
+	}
+
+	// Show current song after previous
+	currentCmd := exec.Command(mpcPath, "current", "-f", "%artist% - %title%")
+	currentOutput, _ := currentCmd.Output()
+	current := strings.TrimSpace(string(currentOutput))
+
+	if current != "" {
+		notify("MPC - Previous", current)
+	}
+
+	return nil
 }
 
 func stop() error {
-	cmd := exec.Command("mpc", "stop")
-	return cmd.Run()
+	cmd := exec.Command(mpcPath, "stop")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("stop failed: %s", strings.TrimSpace(string(output)))
+	}
+
+	notify("MPC", "Stopped")
+
+	return nil
 }
 
 func selectPlaylist(ctx commands.LauncherContext, cfg *Config) error {
-	cmd := exec.Command("mpc", "lsplaylists")
+	cmd := exec.Command(mpcPath, "lsplaylists")
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to get playlists:  %w", err)
@@ -153,28 +288,31 @@ func selectPlaylist(ctx commands.LauncherContext, cfg *Config) error {
 		return fmt.Errorf("cancelled")
 	}
 
-	cmd = exec.Command("mpc", "clear")
+	cmd = exec.Command(mpcPath, "clear")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to clear playlist: %w", err)
+		return fmt.Errorf("failed to clear playlist:  %w", err)
 	}
 
-	cmd = exec.Command("mpc", "load", choice)
+	cmd = exec.Command(mpcPath, "load", choice)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to load playlist: %w", err)
 	}
 
-	cmd = exec.Command("mpc", "play")
+	cmd = exec.Command(mpcPath, "play")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to play: %w", err)
+		return fmt.Errorf("failed to play:  %w", err)
 	}
 
 	cachePlaylist(cfg, choice)
+
+	// Show notification
+	notify("MPC - Playlist Loaded", choice)
 
 	return nil
 }
 
 func selectSong(ctx commands.LauncherContext) error {
-	cmd := exec.Command("mpc", "playlist", "-f", "%position% - %artist% - %title%")
+	cmd := exec.Command(mpcPath, "playlist", "-f", "%position% - %artist% - %title%")
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to get playlist: %w", err)
@@ -207,15 +345,28 @@ func selectSong(ctx commands.LauncherContext) error {
 	var position int
 	fmt.Sscanf(choice, "%d", &position)
 
-	cmd = exec.Command("mpc", "play", fmt.Sprintf("%d", position))
-	return cmd.Run()
+	cmd = exec.Command(mpcPath, "play", fmt.Sprintf("%d", position))
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to play song: %w", err)
+	}
+
+	// Show notification with song info
+	currentCmd := exec.Command(mpcPath, "current", "-f", "%artist% - %title%")
+	currentOutput, _ := currentCmd.Output()
+	current := strings.TrimSpace(string(currentOutput))
+
+	if current != "" {
+		notify("Now Playing", current)
+	}
+
+	return nil
 }
 
 func showCurrent() error {
-	cmd := exec.Command("mpc", "current", "-f", "%artist% - %title%")
+	cmd := exec.Command(mpcPath, "current", "-f", "%artist% - %title%")
 	output, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to get current song: %w", err)
+		return fmt.Errorf("failed to get current song:  %w", err)
 	}
 
 	current := strings.TrimSpace(string(output))
@@ -241,31 +392,15 @@ func cachePlaylist(cfg *Config, playlist string) {
 }
 
 func notify(title, message string) {
-	if _, err := exec.LookPath("notify-send"); err == nil {
-		exec.Command("notify-send", "ql mpc", fmt.Sprintf("%s\n%s", title, message)).Run()
-	}
+	exec.Command("notify-send", "ql mpc", fmt.Sprintf("%s\n%s", title, message)).Run()
 }
 
 func showErrorNotification(title, message string) {
-	if _, err := exec.LookPath("dunstify"); err == nil {
-		cmd := exec.Command("dunstify",
-			"-u", "critical",
-			"-t", "10000",
-			title,
-			message)
-		cmd.Env = os.Environ()
-		cmd.Start()
-		return
-	}
-
-	if _, err := exec.LookPath("notify-send"); err == nil {
-		cmd := exec.Command("notify-send",
-			"-u", "critical",
-			"-t", "10000",
-			title,
-			message)
-		cmd.Env = os.Environ()
-		cmd.Start()
-		return
-	}
+	cmd := exec.Command("notify-send",
+		"-u", "critical",
+		"-t", "10000",
+		title,
+		message)
+	cmd.Env = os.Environ()
+	cmd.Start()
 }

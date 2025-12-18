@@ -1,15 +1,23 @@
 package mpc
 
-// Config за mpc
 type Config struct {
-	Enabled              bool   `toml:"enabled" mapstructure:"enabled"`
-	CurrentPlaylistCache string `toml:"current_playlist_cache" mapstructure:"current_playlist_cache"`
+	Enabled              bool   `mapstructure:"enabled"`
+	ConnectionType       string `mapstructure:"connection_type"` // "tcp" or "socket"
+	Host                 string `mapstructure:"host"`
+	Port                 string `mapstructure:"port"`
+	Socket               string `mapstructure:"socket"`
+	Password             string `mapstructure:"password"`
+	CurrentPlaylistCache string `mapstructure:"current_playlist_cache"`
 }
 
-// DefaultConfig връща default настройки
 func DefaultConfig() Config {
 	return Config{
 		Enabled:              true,
-		CurrentPlaylistCache: "~/.cache/ql_current_playlist",
+		ConnectionType:       "tcp",
+		Host:                 "localhost",
+		Port:                 "6600",
+		Socket:               "~/.config/mpd/socket",
+		Password:             "",
+		CurrentPlaylistCache: "~/.cache/ql/mpc_current_playlist.txt",
 	}
 }

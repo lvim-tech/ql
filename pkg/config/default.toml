@@ -2,32 +2,76 @@
 default_launcher = "rofi"
 
 # Menu style:  "flat" or "grouped"
-menu_style = "flat"
+menu_style = "grouped"
 
 # Module order (only for flat menu)
 module_order = [
     "power",
     "screenshot",
+    "wifi",
+    #
+    "radio",
+    "mpc",
     "audiorecord",
     "videorecord",
-    "radio",
-    "wifi",
-    "mpc",
+    #
     "weather",
 ]
 
 # Module groups (only for grouped menu)
+[module_groups.system]
+name = "System"
+icon = "󰒓 "
+description = "System utilities"
+modules = ["power", "screenshot"]
+
+[module_groups.network]
+name = "Network"
+icon = "󰖩 "
+description = "Network & connectivity"
+modules = ["wifi"]
+
 [module_groups.media]
 name = "Media"
-icon = "🎵"
+icon = "󰝚 "
 description = "Audio & Video"
 modules = ["radio", "mpc", "audiorecord", "videorecord"]
 
-[module_groups.system]
-name = "System"
-icon = "⚙️"
-description = "System utilities"
-modules = ["power", "screenshot", "wifi"]
+[module_groups.info]
+name = "Info"
+icon = "󰋼 "
+description = "Information & utilities"
+modules = ["weather"]
+
+[module_groups.files]
+name = "Files"
+icon = "󰉋 "
+description = "File management"
+modules = []
+
+[module_groups.productivity]
+name = "Productivity"
+icon = "󰸘 "
+description = "Productivity tools"
+modules = []
+
+[module_groups.appearance]
+name = "Appearance"
+icon = "󰏘 "
+description = "Theme & customization"
+modules = []
+
+[module_groups.dev]
+name = "Development"
+icon = "󰅩 "
+description = "Developer tools"
+modules = []
+
+[module_groups.security]
+name = "Security"
+icon = "󰒃 "
+description = "Security & privacy"
+modules = []
 
 # Launcher configurations
 [launchers.rofi]
@@ -91,7 +135,10 @@ show_notify = true
 # MPC module
 [commands.mpc]
 enabled = true
-current_playlist_cache = "~/.cache/ql_current_playlist"
+connection_type = "tcp"
+host = "192.168.1.10"
+port = "6600"
+current_playlist_cache = "~/.cache/ql/mpc_current_playlist.txt"
 
 # Audio Record module
 [commands.audiorecord]
