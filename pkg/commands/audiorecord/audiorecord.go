@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/lvim-tech/ql/pkg/commands"
+	"github.com/lvim-tech/ql/pkg/config"
+	"github.com/lvim-tech/ql/pkg/utils"
 	"github.com/mitchellh/mapstructure"
 )
 
@@ -47,6 +49,8 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 	}
 
+	notifCfg := ctx.Config().GetNotificationConfig()
+
 	for {
 		options := []string{
 			"← Back",
@@ -56,57 +60,60 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 
 		choice, err := ctx.Show(options, "Audio Record")
 		if err != nil {
+			// ESC pressed - exit completely
 			return commands.CommandResult{Success: false}
 		}
 
 		if choice == "← Back" {
-			return commands.CommandResult{Success: false}
+			// Back pressed - return to module menu
+			return commands.CommandResult{
+				Success: false,
+				Error:   commands.ErrBack,
+			}
 		}
 
 		var actionErr error
 		switch choice {
 		case "Start Recording":
-			actionErr = startRecording(&cfg)
+			actionErr = startRecording(&cfg, &notifCfg)
 		case "Stop Recording":
-			actionErr = stopRecording()
+			actionErr = stopRecording(&notifCfg)
 		default:
-			showErrorNotification("Audio Record Error", fmt.Sprintf("Unknown choice: %s", choice))
+			utils.ShowErrorNotificationWithConfig(&notifCfg, "Audio Record Error", fmt.Sprintf("Unknown choice: %s", choice))
 			continue
 		}
 
 		if actionErr != nil {
-			showErrorNotification("Audio Record Error", actionErr.Error())
+			// Error occurred - show notification and loop back to menu
+			utils.ShowErrorNotificationWithConfig(&notifCfg, "Audio Record Error", actionErr.Error())
 			continue
 		}
 
+		// Action succeeded - exit
 		return commands.CommandResult{Success: true}
 	}
 }
 
-func startRecording(cfg *Config) error {
+func startRecording(cfg *Config, notifCfg *config.NotificationConfig) error {
 	if isRecording() {
 		return fmt.Errorf("recording already in progress")
 	}
 
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
+	if !utils.CommandExists("ffmpeg") {
 		return fmt.Errorf("ffmpeg is not installed")
 	}
 
-	saveDir := cfg.SaveDir
-	if len(saveDir) >= 2 && saveDir[:2] == "~/" {
-		saveDir = filepath.Join(os.Getenv("HOME"), saveDir[2:])
-	}
-
-	if err := os.MkdirAll(saveDir, 0755); err != nil {
+	saveDir := utils.ExpandHomeDir(cfg.SaveDir)
+	if err := utils.EnsureDir(saveDir); err != nil {
 		return fmt.Errorf("failed to create save directory: %w", err)
 	}
 
-	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	timestamp := utils.GetTimestamp()
 	filename := fmt.Sprintf("%s_%s.%s", cfg.FilePrefix, timestamp, cfg.Format)
 	outputPath := filepath.Join(saveDir, filename)
 
-	if _, err := os.Stat(outputPath); err == nil {
-		timestamp = time.Now().Format("2006-01-02_15-04-05.000")
+	if utils.FileExists(outputPath) {
+		timestamp = utils.GetTimestampMillis()
 		filename = fmt.Sprintf("%s_%s.%s", cfg.FilePrefix, timestamp, cfg.Format)
 		outputPath = filepath.Join(saveDir, filename)
 	}
@@ -115,17 +122,22 @@ func startRecording(cfg *Config) error {
 		"-f", "pulse",
 		"-i", "default",
 		"-q: a", cfg.Quality,
-		"-n",
+		"-y",
 		outputPath,
 	}
 
 	cmd := exec.Command("ffmpeg", args...)
 
-	devNull, err := os.Open(os.DevNull)
-	if err == nil {
-		cmd.Stderr = devNull
-		cmd.Stdout = devNull
-		defer devNull.Close()
+	if utils.IsTerminal() && notifCfg.ShowInTerminal {
+		cmd.Stderr = os.Stderr
+		cmd.Stdout = os.Stdout
+	} else {
+		devNull, err := os.Open(os.DevNull)
+		if err == nil {
+			cmd.Stderr = devNull
+			cmd.Stdout = devNull
+			defer devNull.Close()
+		}
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -136,7 +148,7 @@ func startRecording(cfg *Config) error {
 	pidBytes := []byte(strconv.Itoa(cmd.Process.Pid))
 	if err := os.WriteFile(pidFile, pidBytes, 0644); err != nil {
 		cmd.Process.Kill()
-		return fmt.Errorf("failed to save PID: %w", err)
+		return fmt.Errorf("failed to save PID:  %w", err)
 	}
 
 	pathFile := getOutputPathFile()
@@ -158,12 +170,12 @@ func startRecording(cfg *Config) error {
 		return fmt.Errorf("recording process failed to start")
 	}
 
-	notify("Recording Started", filename)
+	utils.NotifyWithConfig(notifCfg, "Recording Started", filename)
 
 	return nil
 }
 
-func stopRecording() error {
+func stopRecording(notifCfg *config.NotificationConfig) error {
 	if !isRecording() {
 		return fmt.Errorf("no recording in progress")
 	}
@@ -202,14 +214,14 @@ func stopRecording() error {
 
 	filename := filepath.Base(string(outputPath))
 
-	notify("Recording Stopped", filename)
+	utils.NotifyWithConfig(notifCfg, "Recording Stopped", filename)
 
 	return nil
 }
 
 func isRecording() bool {
 	pidFile := getPIDFile()
-	if _, err := os.Stat(pidFile); os.IsNotExist(err) {
+	if !utils.FileExists(pidFile) {
 		return false
 	}
 
@@ -239,39 +251,9 @@ func isRecording() bool {
 }
 
 func getPIDFile() string {
-	return filepath.Join(os.TempDir(), "ql_audiorecord. pid")
+	return "/tmp/ql_audiorecord. pid"
 }
 
 func getOutputPathFile() string {
-	return filepath.Join(os.TempDir(), "ql_audiorecord_output.txt")
-}
-
-func notify(title, message string) {
-	if _, err := exec.LookPath("notify-send"); err == nil {
-		exec.Command("notify-send", title, message).Run()
-	}
-}
-
-func showErrorNotification(title, message string) {
-	if _, err := exec.LookPath("dunstify"); err == nil {
-		cmd := exec.Command("dunstify",
-			"-u", "critical",
-			"-t", "10000",
-			title,
-			message)
-		cmd.Env = os.Environ()
-		cmd.Start()
-		return
-	}
-
-	if _, err := exec.LookPath("notify-send"); err == nil {
-		cmd := exec.Command("notify-send",
-			"-u", "critical",
-			"-t", "10000",
-			title,
-			message)
-		cmd.Env = os.Environ()
-		cmd.Start()
-		return
-	}
+	return "/tmp/ql_audiorecord_output.txt"
 }

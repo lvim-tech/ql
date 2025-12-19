@@ -5,11 +5,12 @@ package wifi
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 
 	"github.com/lvim-tech/ql/pkg/commands"
+	"github.com/lvim-tech/ql/pkg/config"
+	"github.com/lvim-tech/ql/pkg/utils"
 	"github.com/mitchellh/mapstructure"
 )
 
@@ -44,13 +45,16 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 	}
 
-	if _, err := exec.LookPath("nmcli"); err != nil {
+	if !utils.CommandExists("nmcli") {
 		return commands.CommandResult{
 			Success: false,
 			Error:   fmt.Errorf("nmcli is not installed (required for wifi management)"),
 		}
 	}
 
+	notifCfg := ctx.Config().GetNotificationConfig()
+
+	// Main loop - keeps showing menu until Back, ESC, or successful action
 	for {
 		options := []string{
 			"← Back",
@@ -62,42 +66,54 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 
 		choice, err := ctx.Show(options, "WiFi")
 		if err != nil {
+			// ESC pressed - exit completely
 			return commands.CommandResult{Success: false}
 		}
 
 		if choice == "← Back" {
-			return commands.CommandResult{Success: false}
+			// Back pressed - return to module menu
+			return commands.CommandResult{
+				Success: false,
+				Error:   commands.ErrBack,
+			}
 		}
 
 		var actionErr error
 		switch choice {
 		case "Connect to Network":
-			actionErr = connectToNetwork(ctx, &cfg)
+			actionErr = connectToNetwork(ctx, &cfg, &notifCfg)
 		case "Disconnect":
-			actionErr = disconnect(&cfg)
+			actionErr = disconnect(&cfg, &notifCfg)
 		case "Show Current Connection":
-			actionErr = showCurrentConnection(&cfg)
+			actionErr = showCurrentConnection(&cfg, &notifCfg)
 		case "Toggle WiFi":
-			actionErr = toggleWifi(&cfg)
+			actionErr = toggleWifi(&cfg, &notifCfg)
 		default:
-			showErrorNotification("WiFi Error", fmt.Sprintf("Unknown choice: %s", choice))
+			utils.ShowErrorNotificationWithConfig(&notifCfg, "WiFi Error", fmt.Sprintf("Unknown choice: %s", choice))
 			continue
 		}
 
 		if actionErr != nil {
-			showErrorNotification("WiFi Error", actionErr.Error())
+			// Check if user cancelled in submenu
+			if actionErr.Error() == "cancelled" {
+				// Loop back to main menu
+				continue
+			}
+			// Other error - show notification and loop back
+			utils.ShowErrorNotificationWithConfig(&notifCfg, "WiFi Error", actionErr.Error())
 			continue
 		}
 
+		// Action succeeded - exit
 		return commands.CommandResult{Success: true}
 	}
 }
 
-func connectToNetwork(ctx commands.LauncherContext, cfg *Config) error {
+func connectToNetwork(ctx commands.LauncherContext, cfg *Config, notifCfg *config.NotificationConfig) error {
 	cmd := exec.Command("nmcli", "-t", "-f", "SSID", "dev", "wifi", "list")
 	output, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to scan networks:  %w", err)
+		return fmt.Errorf("failed to scan networks: %w", err)
 	}
 
 	lines := strings.Split(string(output), "\n")
@@ -120,81 +136,130 @@ func connectToNetwork(ctx commands.LauncherContext, cfg *Config) error {
 
 	choice, err := ctx.Show(networks, "Select Network")
 	if err != nil {
+		// ESC pressed in network selection
 		return fmt.Errorf("cancelled")
 	}
 
 	if choice == "← Back" {
+		// Back pressed in network selection
 		return fmt.Errorf("cancelled")
 	}
 
 	cmd = exec.Command("nmcli", "dev", "wifi", "connect", choice)
-	if err := cmd.Run(); err != nil {
-		if cfg.ShowNotify {
-			notify("Connection failed", choice)
+	output, err = cmd.CombinedOutput()
+
+	if err != nil {
+		if strings.Contains(string(output), "Secrets were required") ||
+			strings.Contains(string(output), "password") {
+
+			password, passErr := utils.PromptPassword("WiFi Password")
+			if passErr != nil || password == "" {
+				return fmt.Errorf("password required but not provided")
+			}
+
+			cmd = exec.Command("nmcli", "dev", "wifi", "connect", choice, "password", password)
+			output, err = cmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("failed to connect: %s", strings.TrimSpace(string(output)))
+			}
+		} else {
+			return fmt.Errorf("failed to connect: %s", strings.TrimSpace(string(output)))
 		}
-		return fmt.Errorf("failed to connect: %w", err)
 	}
 
 	if cfg.ShowNotify {
-		notify("Connected to", choice)
+		utils.NotifyWithConfig(notifCfg, "WiFi Connected", choice)
+	}
+
+	if cfg.TestHost != "" {
+		if testErr := testConnection(cfg); testErr != nil {
+			if cfg.ShowNotify {
+				utils.ShowErrorNotificationWithConfig(notifCfg, "WiFi Warning", fmt.Sprintf("Connected but no internet: %v", testErr))
+			}
+		}
 	}
 
 	return nil
 }
 
-func disconnect(cfg *Config) error {
-	cmd := exec.Command("nmcli", "-t", "-f", "NAME", "con", "show", "--active")
+func disconnect(cfg *Config, notifCfg *config.NotificationConfig) error {
+	cmd := exec.Command("nmcli", "-t", "-f", "NAME,TYPE", "con", "show", "--active")
 	output, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to get active connection: %w", err)
+		return fmt.Errorf("failed to get active connections: %w", err)
 	}
 
-	connection := strings.TrimSpace(string(output))
-	if connection == "" {
-		return fmt.Errorf("no active connection")
+	lines := strings.Split(string(output), "\n")
+	var wifiConnection string
+
+	for _, line := range lines {
+		if strings.Contains(line, "802-11-wireless") || strings.Contains(line, "wireless") {
+			parts := strings.Split(line, ":")
+			if len(parts) > 0 {
+				wifiConnection = parts[0]
+				break
+			}
+		}
 	}
 
-	cmd = exec.Command("nmcli", "con", "down", connection)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to disconnect: %w", err)
+	if wifiConnection == "" {
+		return fmt.Errorf("no active WiFi connection")
+	}
+
+	cmd = exec.Command("nmcli", "con", "down", wifiConnection)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to disconnect: %s", strings.TrimSpace(string(output)))
 	}
 
 	if cfg.ShowNotify {
-		notify("Disconnected from", connection)
+		utils.NotifyWithConfig(notifCfg, "WiFi Disconnected", wifiConnection)
 	}
 
 	return nil
 }
 
-func showCurrentConnection(cfg *Config) error {
+func showCurrentConnection(cfg *Config, notifCfg *config.NotificationConfig) error {
 	cmd := exec.Command("nmcli", "-t", "-f", "NAME,TYPE,DEVICE", "con", "show", "--active")
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to get connection info: %w", err)
 	}
 
-	info := strings.TrimSpace(string(output))
-	if info == "" {
-		info = "No active connection"
+	lines := strings.Split(string(output), "\n")
+	var wifiInfo string
+
+	for _, line := range lines {
+		if strings.Contains(line, "802-11-wireless") || strings.Contains(line, "wireless") {
+			parts := strings.Split(line, ":")
+			if len(parts) >= 3 {
+				wifiInfo = fmt.Sprintf("Network: %s\nDevice: %s", parts[0], parts[2])
+				break
+			}
+		}
+	}
+
+	if wifiInfo == "" {
+		wifiInfo = "Not connected to WiFi"
 	}
 
 	if cfg.ShowNotify {
-		notify("Current Connection", info)
+		utils.NotifyWithConfig(notifCfg, "WiFi Status", wifiInfo)
 	}
 
 	return nil
 }
 
-func toggleWifi(cfg *Config) error {
+func toggleWifi(cfg *Config, notifCfg *config.NotificationConfig) error {
 	cmd := exec.Command("nmcli", "radio", "wifi")
 	output, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to get wifi state: %w", err)
+		return fmt.Errorf("failed to get WiFi state: %w", err)
 	}
 
 	state := strings.TrimSpace(string(output))
-
 	var newState string
+
 	if state == "enabled" {
 		cmd = exec.Command("nmcli", "radio", "wifi", "off")
 		newState = "disabled"
@@ -203,43 +268,32 @@ func toggleWifi(cfg *Config) error {
 		newState = "enabled"
 	}
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to toggle wifi: %w", err)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to toggle WiFi: %s", strings.TrimSpace(string(output)))
 	}
 
 	if cfg.ShowNotify {
-		notify("WiFi", fmt.Sprintf("WiFi %s", newState))
+		utils.NotifyWithConfig(notifCfg, "WiFi", fmt.Sprintf("WiFi %s", newState))
 	}
 
 	return nil
 }
 
-func notify(title, message string) {
-	if _, err := exec.LookPath("notify-send"); err == nil {
-		exec.Command("notify-send", "ql wifi", fmt.Sprintf("%s\n%s", title, message)).Run()
-	}
-}
-
-func showErrorNotification(title, message string) {
-	if _, err := exec.LookPath("dunstify"); err == nil {
-		cmd := exec.Command("dunstify",
-			"-u", "critical",
-			"-t", "10000",
-			title,
-			message)
-		cmd.Env = os.Environ()
-		cmd.Start()
-		return
+func testConnection(cfg *Config) error {
+	if !utils.CommandExists("ping") {
+		return fmt.Errorf("ping command not found")
 	}
 
-	if _, err := exec.LookPath("notify-send"); err == nil {
-		cmd := exec.Command("notify-send",
-			"-u", "critical",
-			"-t", "10000",
-			title,
-			message)
-		cmd.Env = os.Environ()
-		cmd.Start()
-		return
+	cmd := exec.Command("ping",
+		"-c", fmt.Sprintf("%d", cfg.TestCount),
+		"-W", fmt.Sprintf("%d", cfg.TestWait),
+		cfg.TestHost)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("connection test failed: %s", strings.TrimSpace(string(output)))
 	}
+
+	return nil
 }

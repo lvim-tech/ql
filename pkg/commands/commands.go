@@ -4,7 +4,15 @@
 package commands
 
 import (
+	"errors"
+
 	"github.com/lvim-tech/ql/pkg/config"
+)
+
+// Sentinel errors for command navigation
+var (
+	ErrCancelled = errors.New("cancelled")
+	ErrBack      = errors.New("back")
 )
 
 // CommandResult represents the result of command execution
@@ -24,4 +32,16 @@ type Command struct {
 type LauncherContext interface {
 	Show(options []string, prompt string) (string, error)
 	Config() *config.Config
+}
+
+var registry []Command
+
+// Register registers a command
+func Register(cmd Command) {
+	registry = append(registry, cmd)
+}
+
+// GetAll returns all registered commands
+func GetAll() []Command {
+	return registry
 }

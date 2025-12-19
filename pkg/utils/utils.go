@@ -1,6 +1,6 @@
 // Package utils provides common utility functions for ql commands.
-// It includes helpers for file operations, command execution, notifications,
-// display server detection, and more.
+// It includes helpers for file operations, command execution,
+// display server detection, and process management.
 package utils
 
 import (
@@ -8,6 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"time"
 )
 
@@ -15,7 +18,7 @@ import (
 // Display Server Detection
 // ============================================================================
 
-// ServerType представлява типа display server
+// ServerType represents the display server type
 type ServerType int
 
 const (
@@ -24,22 +27,18 @@ const (
 	Wayland
 )
 
-// DetectDisplayServer открива текущия display server
+// DetectDisplayServer detects the current display server
 func DetectDisplayServer() ServerType {
-	// Провери за Wayland
 	if os.Getenv("WAYLAND_DISPLAY") != "" {
 		return Wayland
 	}
-
-	// Провери за X11
 	if os.Getenv("DISPLAY") != "" {
 		return X11
 	}
-
 	return Unknown
 }
 
-// String връща string представяне на ServerType
+// String returns string representation of ServerType
 func (s ServerType) String() string {
 	switch s {
 	case X11:
@@ -51,27 +50,27 @@ func (s ServerType) String() string {
 	}
 }
 
-// IsX11 проверява дали е X11
+// IsX11 checks if display server is X11
 func (s ServerType) IsX11() bool {
 	return s == X11
 }
 
-// IsWayland проверява дали е Wayland
+// IsWayland checks if display server is Wayland
 func (s ServerType) IsWayland() bool {
 	return s == Wayland
 }
 
-// IsUnknown проверява дали е неизвестен
+// IsUnknown checks if display server is unknown
 func (s ServerType) IsUnknown() bool {
 	return s == Unknown
 }
 
-// GetSessionType връща XDG_SESSION_TYPE ако е зададен
+// GetSessionType returns XDG_SESSION_TYPE environment variable
 func GetSessionType() string {
 	return os.Getenv("XDG_SESSION_TYPE")
 }
 
-// GetCurrentDesktop връща XDG_CURRENT_DESKTOP ако е зададен
+// GetCurrentDesktop returns XDG_CURRENT_DESKTOP environment variable
 func GetCurrentDesktop() string {
 	return os.Getenv("XDG_CURRENT_DESKTOP")
 }
@@ -80,68 +79,108 @@ func GetCurrentDesktop() string {
 // Command Utilities
 // ============================================================================
 
-// CommandExists проверява дали команда съществува в PATH
+// CommandExists checks if a command exists in PATH
 func CommandExists(cmd string) bool {
 	_, err := exec.LookPath(cmd)
 	return err == nil
 }
 
-// RunCommand изпълнява команда и връща output
+// RunCommand executes a command and returns output
 func RunCommand(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	output, err := cmd.CombinedOutput()
 	return string(output), err
 }
 
-// RunCommandBackground изпълнява команда в background
+// RunCommandBackground executes a command in background
 func RunCommandBackground(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	return cmd.Start()
 }
 
-// RunCommandWithEnv изпълнява команда с custom environment
-func RunCommandWithEnv(env []string, name string, args ...string) error {
+// StartDetachedProcess starts a process completely detached (daemon mode)
+func StartDetachedProcess(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
-	cmd.Env = env
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+		Pgid:    0,
+	}
+	return cmd.Start()
+}
+
+// ============================================================================
+// Process Management
+// ============================================================================
+
+// KillProcessByName kills all processes with given name
+func KillProcessByName(name string) error {
+	cmd := exec.Command("pkill", "-9", name)
 	return cmd.Run()
+}
+
+// IsProcessRunning checks if a process with given name is running
+func IsProcessRunning(name string) bool {
+	cmd := exec.Command("pgrep", name)
+	return cmd.Run() == nil
+}
+
+// GetProcessPID returns PID of process by name (first found)
+func GetProcessPID(name string) (int, error) {
+	cmd := exec.Command("pgrep", name)
+	output, err := cmd.Output()
+	if err != nil {
+		return 0, err
+	}
+
+	pidStr := strings.TrimSpace(string(output))
+	if pidStr == "" {
+		return 0, fmt.Errorf("no process found")
+	}
+
+	lines := strings.Split(pidStr, "\n")
+	return strconv.Atoi(lines[0])
 }
 
 // ============================================================================
 // File System Utilities
 // ============================================================================
 
-// EnsureDir създава директория ако не съществува
-func EnsureDir(path string) error {
-	// Разшири ~ за home directory
-	path = ExpandPath(path)
+// ExpandHomeDir expands ~ in paths
+func ExpandHomeDir(path string) string {
+	if len(path) > 0 && path[0] == '~' {
+		return filepath.Join(GetHomeDir(), path[1:])
+	}
+	return path
+}
 
-	// Провери дали съществува
+// EnsureDir creates directory if it doesn't exist
+func EnsureDir(path string) error {
+	path = ExpandHomeDir(path)
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return os.MkdirAll(path, 0755)
 	}
-
 	return nil
 }
 
-// ExpandPath разширява ~ и environment variables в път
-func ExpandPath(path string) string {
-	if len(path) > 0 && path[0] == '~' {
-		home := os.Getenv("HOME")
-		path = filepath.Join(home, path[1:])
-	}
-	return os.ExpandEnv(path)
+// EnsureDirExpanded creates directory after home expansion
+// Alias for EnsureDir (for backward compatibility)
+func EnsureDirExpanded(path string) error {
+	return EnsureDir(path)
 }
 
-// FileExists проверява дали файл съществува
+// FileExists checks if file exists
 func FileExists(path string) bool {
-	path = ExpandPath(path)
+	path = ExpandHomeDir(path)
 	_, err := os.Stat(path)
 	return err == nil
 }
 
-// IsDirectory проверява дали пътят е директория
+// IsDirectory checks if path is a directory
 func IsDirectory(path string) bool {
-	path = ExpandPath(path)
+	path = ExpandHomeDir(path)
 	info, err := os.Stat(path)
 	if err != nil {
 		return false
@@ -153,136 +192,26 @@ func IsDirectory(path string) bool {
 // Timestamp Utilities
 // ============================================================================
 
-// GetTimestamp връща timestamp за имена на файлове
+// GetTimestamp returns timestamp for filenames (YYYY-MM-DD_HH-MM-SS)
 func GetTimestamp() string {
 	return time.Now().Format("2006-01-02_15-04-05")
 }
 
-// GetTimestampMillis връща timestamp с милисекунди
+// GetTimestampMillis returns timestamp with milliseconds
 func GetTimestampMillis() string {
 	return time.Now().Format("2006-01-02_15-04-05.000")
 }
 
-// GetTimestampCustom връща timestamp с custom format
+// GetTimestampCustom returns timestamp with custom format
 func GetTimestampCustom(format string) string {
 	return time.Now().Format(format)
-}
-
-// ============================================================================
-// Notification Utilities
-// ============================================================================
-
-// Notify изпраща desktop notification
-func Notify(title, message string) error {
-	return NotifyWithOptions(title, message, NotifyOptions{})
-}
-
-// NotifyWithIcon изпраща notification с икона
-func NotifyWithIcon(title, message, icon string) error {
-	return NotifyWithOptions(title, message, NotifyOptions{Icon: icon})
-}
-
-// NotifyWithUrgency изпраща notification с urgency level
-func NotifyWithUrgency(title, message, urgency string) error {
-	return NotifyWithOptions(title, message, NotifyOptions{Urgency: urgency})
-}
-
-// NotifyOptions представлява опции за notification
-type NotifyOptions struct {
-	Icon     string
-	Urgency  string // "low", "normal", "critical"
-	Timeout  int    // milliseconds
-	Category string
-}
-
-// NotifyWithOptions изпраща notification с пълни опции
-func NotifyWithOptions(title, message string, opts NotifyOptions) error {
-	// Опитай dunstify първо (по-мощен)
-	if CommandExists("dunstify") {
-		return sendDunstify(title, message, opts)
-	}
-
-	// Fallback към notify-send
-	if CommandExists("notify-send") {
-		return sendNotifySend(title, message, opts)
-	}
-
-	// Няма notification daemon
-	return nil
-}
-
-func sendDunstify(title, message string, opts NotifyOptions) error {
-	args := []string{}
-
-	if opts.Icon != "" {
-		args = append(args, "-i", opts.Icon)
-	}
-
-	if opts.Urgency != "" {
-		args = append(args, "-u", opts.Urgency)
-	}
-
-	if opts.Timeout > 0 {
-		args = append(args, "-t", fmt.Sprintf("%d", opts.Timeout))
-	}
-
-	args = append(args, title, message)
-
-	cmd := exec.Command("dunstify", args...)
-	return cmd.Run()
-}
-
-func sendNotifySend(title, message string, opts NotifyOptions) error {
-	args := []string{}
-
-	if opts.Icon != "" {
-		args = append(args, "-i", opts.Icon)
-	}
-
-	if opts.Urgency != "" {
-		args = append(args, "-u", opts.Urgency)
-	}
-
-	if opts.Timeout > 0 {
-		args = append(args, "-t", fmt.Sprintf("%d", opts.Timeout))
-	}
-
-	args = append(args, title, message)
-
-	cmd := exec.Command("notify-send", args...)
-	return cmd.Run()
-}
-
-// ============================================================================
-// UI Utilities
-// ============================================================================
-
-// Confirm пита потребителя за потвърждение (yes/no)
-func Confirm(ctx any, prompt string) (bool, error) {
-	// Type assertion за launcher context
-	type Shower interface {
-		Show([]string, string) (string, error)
-	}
-
-	shower, ok := ctx.(Shower)
-	if !ok {
-		return false, fmt.Errorf("invalid context type")
-	}
-
-	options := []string{"Yes", "No"}
-	choice, err := shower.Show(options, prompt)
-	if err != nil {
-		return false, err
-	}
-
-	return choice == "Yes", nil
 }
 
 // ============================================================================
 // Environment Utilities
 // ============================================================================
 
-// GetEnvOrDefault връща environment variable или default стойност
+// GetEnvOrDefault returns environment variable or default value
 func GetEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
@@ -290,12 +219,12 @@ func GetEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
-// GetHomeDir връща home директорията
+// GetHomeDir returns home directory
 func GetHomeDir() string {
 	return os.Getenv("HOME")
 }
 
-// GetConfigDir връща XDG config директорията
+// GetConfigDir returns XDG config directory
 func GetConfigDir() string {
 	if configDir := os.Getenv("XDG_CONFIG_HOME"); configDir != "" {
 		return configDir
@@ -303,7 +232,7 @@ func GetConfigDir() string {
 	return filepath.Join(GetHomeDir(), ".config")
 }
 
-// GetDataDir връща XDG data директорията
+// GetDataDir returns XDG data directory
 func GetDataDir() string {
 	if dataDir := os.Getenv("XDG_DATA_HOME"); dataDir != "" {
 		return dataDir
@@ -311,10 +240,101 @@ func GetDataDir() string {
 	return filepath.Join(GetHomeDir(), ".local", "share")
 }
 
-// GetCacheDir връща XDG cache директорията
+// GetCacheDir returns XDG cache directory
 func GetCacheDir() string {
 	if cacheDir := os.Getenv("XDG_CACHE_HOME"); cacheDir != "" {
 		return cacheDir
 	}
 	return filepath.Join(GetHomeDir(), ".cache")
+}
+
+// ============================================================================
+// Password Input Utilities
+// ============================================================================
+
+// PromptPassword shows password prompt with appropriate launcher
+func PromptPassword(prompt string) (string, error) {
+	// Try rofi first (best password support)
+	if CommandExists("rofi") {
+		cmd := exec.Command("rofi", "-dmenu", "-password", "-p", prompt)
+		output, err := cmd.Output()
+		if err == nil {
+			password := strings.TrimSpace(string(output))
+			if password != "" {
+				return password, nil
+			}
+		}
+	}
+
+	// Try zenity (GUI password dialog)
+	if CommandExists("zenity") {
+		cmd := exec.Command("zenity", "--password", "--title", prompt)
+		output, err := cmd.Output()
+		if err == nil {
+			password := strings.TrimSpace(string(output))
+			if password != "" {
+				return password, nil
+			}
+		}
+	}
+
+	// Try dmenu (no password masking, but works)
+	if CommandExists("dmenu") {
+		cmd := exec.Command("dmenu", "-p", prompt)
+		output, err := cmd.Output()
+		if err == nil {
+			password := strings.TrimSpace(string(output))
+			if password != "" {
+				return password, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("no password prompt tool found (rofi, zenity, dmenu)")
+}
+
+// ============================================================================
+// Terminal Detection
+// ============================================================================
+
+// IsTerminal checks if program is running in a terminal
+func IsTerminal() bool {
+	stdinInfo, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	stdinIsTTY := (stdinInfo.Mode() & os.ModeCharDevice) != 0
+
+	if !stdinIsTTY {
+		return false
+	}
+
+	tty, err := os.Open("/dev/tty")
+	if err != nil {
+		return false
+	}
+	tty.Close()
+
+	return true
+}
+
+// DetectTerminal detects available terminal emulator
+func DetectTerminal() string {
+	terminals := []string{
+		"kitty",
+		"alacritty",
+		"foot",
+		"wezterm",
+		"gnome-terminal",
+		"konsole",
+		"xterm",
+	}
+
+	for _, term := range terminals {
+		if CommandExists(term) {
+			return term
+		}
+	}
+
+	return ""
 }

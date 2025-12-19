@@ -95,7 +95,7 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 	}
 
-	// Main loop - keeps showing menu until Back, ESC, or successful action
+	// Main loop - keeps showing menu until Back or ESC
 	for {
 		options := []string{
 			"← Back",
@@ -154,8 +154,8 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 			continue
 		}
 
-		// Action succeeded - exit
-		return commands.CommandResult{Success: true}
+		// Action succeeded - loop back to menu (for play/pause/next/etc)
+		continue
 	}
 }
 

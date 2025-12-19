@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/lvim-tech/ql/pkg/commands"
+	"github.com/lvim-tech/ql/pkg/config"
+	"github.com/lvim-tech/ql/pkg/utils"
 	"github.com/mitchellh/mapstructure"
 )
 
@@ -46,6 +48,9 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 	}
 
+	notifCfg := ctx.Config().GetNotificationConfig()
+
+	// Main loop - keeps showing menu until Back, ESC, or successful action
 	for {
 		options := []string{
 			"← Back",
@@ -55,44 +60,52 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 
 		choice, err := ctx.Show(options, "Video Record")
 		if err != nil {
+			// ESC pressed - exit completely
 			return commands.CommandResult{Success: false}
 		}
 
 		if choice == "← Back" {
-			return commands.CommandResult{Success: false}
+			// Back pressed - return to module menu
+			return commands.CommandResult{
+				Success: false,
+				Error:   commands.ErrBack,
+			}
 		}
 
 		var actionErr error
 		switch choice {
 		case "Start Recording":
-			actionErr = startRecording(ctx, &cfg)
+			actionErr = startRecording(ctx, &cfg, &notifCfg)
 		case "Stop Recording":
-			actionErr = stopRecording(&cfg)
+			actionErr = stopRecording(&cfg, &notifCfg)
 		default:
-			showErrorNotification("Video Record Error", fmt.Sprintf("Unknown choice: %s", choice))
+			utils.ShowErrorNotificationWithConfig(&notifCfg, "Video Record Error", fmt.Sprintf("Unknown choice: %s", choice))
 			continue
 		}
 
 		if actionErr != nil {
-			showErrorNotification("Video Record Error", actionErr.Error())
+			// Check if user cancelled in submenu
+			if actionErr.Error() == "cancelled" {
+				// Loop back to main menu
+				continue
+			}
+			// Other error - show notification and loop back
+			utils.ShowErrorNotificationWithConfig(&notifCfg, "Video Record Error", actionErr.Error())
 			continue
 		}
 
+		// Action succeeded - exit
 		return commands.CommandResult{Success: true}
 	}
 }
 
-func startRecording(ctx commands.LauncherContext, cfg *Config) error {
-	saveDir := cfg.SaveDir
-	if len(saveDir) >= 2 && saveDir[:2] == "~/" {
-		saveDir = filepath.Join(os.Getenv("HOME"), saveDir[2:])
+func startRecording(ctx commands.LauncherContext, cfg *Config, notifCfg *config.NotificationConfig) error {
+	saveDir := utils.ExpandHomeDir(cfg.SaveDir)
+	if err := utils.EnsureDir(saveDir); err != nil {
+		return fmt.Errorf("failed to create save directory:  %w", err)
 	}
 
-	if err := os.MkdirAll(saveDir, 0755); err != nil {
-		return fmt.Errorf("failed to create save directory: %w", err)
-	}
-
-	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	timestamp := utils.GetTimestamp()
 	filename := fmt.Sprintf("%s_%s.%s", cfg.FilePrefix, timestamp, cfg.Format)
 	outputPath := filepath.Join(saveDir, filename)
 
@@ -107,17 +120,19 @@ func startRecording(ctx commands.LauncherContext, cfg *Config) error {
 
 	regionChoice, err := ctx.Show(regionOptions, "Recording Region")
 	if err != nil {
+		// ESC pressed in region selection
 		return fmt.Errorf("cancelled")
 	}
 
 	if regionChoice == "← Back" {
+		// Back pressed in region selection
 		return fmt.Errorf("cancelled")
 	}
 
 	var cmd *exec.Cmd
 
 	if isWayland {
-		cmd, err = buildWaylandCommand(regionChoice, outputPath, cfg)
+		cmd, err = buildWaylandCommand(regionChoice, outputPath, cfg, notifCfg)
 		if err != nil {
 			return err
 		}
@@ -150,7 +165,7 @@ func startRecording(ctx commands.LauncherContext, cfg *Config) error {
 	}
 
 	if cfg.ShowNotify {
-		notify("Video recording started", filename)
+		utils.NotifyWithConfig(notifCfg, "Video recording started", filename)
 	}
 
 	cmd.Process.Release()
@@ -158,8 +173,8 @@ func startRecording(ctx commands.LauncherContext, cfg *Config) error {
 	return nil
 }
 
-func buildWaylandCommand(region, outputPath string, cfg *Config) (*exec.Cmd, error) {
-	if _, err := exec.LookPath("wf-recorder"); err != nil {
+func buildWaylandCommand(region, outputPath string, cfg *Config, notifCfg *config.NotificationConfig) (*exec.Cmd, error) {
+	if !utils.CommandExists("wf-recorder") {
 		return nil, fmt.Errorf("wf-recorder is not installed (required for Wayland)")
 	}
 
@@ -178,19 +193,20 @@ func buildWaylandCommand(region, outputPath string, cfg *Config) (*exec.Cmd, err
 
 	switch region {
 	case "Fullscreen":
+		// No additional args needed
 
 	case "Active Window":
 		windowGeometry, err := getWaylandActiveWindow()
 		if err != nil {
 			if cfg.ShowNotify {
-				notify("Warning", "Active window not supported, using fullscreen")
+				utils.NotifyWithConfig(notifCfg, "Warning", "Active window not supported, using fullscreen")
 			}
 		} else {
 			args = append(args, "-g", windowGeometry)
 		}
 
 	case "Select Region":
-		if _, err := exec.LookPath("slurp"); err != nil {
+		if !utils.CommandExists("slurp") {
 			return nil, fmt.Errorf("slurp is not installed (required for region selection)")
 		}
 
@@ -207,7 +223,7 @@ func buildWaylandCommand(region, outputPath string, cfg *Config) (*exec.Cmd, err
 }
 
 func buildX11Command(region, outputPath string, cfg *Config) (*exec.Cmd, error) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
+	if !utils.CommandExists("ffmpeg") {
 		return nil, fmt.Errorf("ffmpeg is not installed")
 	}
 
@@ -231,7 +247,7 @@ func buildX11Command(region, outputPath string, cfg *Config) (*exec.Cmd, error) 
 		args = append(args, "-i", fmt.Sprintf(":0.0+%s", offset))
 
 	case "Select Region":
-		if _, err := exec.LookPath("slop"); err != nil {
+		if !utils.CommandExists("slop") {
 			return nil, fmt.Errorf("slop is not installed (required for region selection)")
 		}
 
@@ -261,7 +277,7 @@ func buildX11Command(region, outputPath string, cfg *Config) (*exec.Cmd, error) 
 
 	args = append(args,
 		"-r", fmt.Sprintf("%d", cfg.X11.OutputFPS),
-		"-c:v", cfg.X11.VideoCodec,
+		"-c: v", cfg.X11.VideoCodec,
 		"-crf", cfg.Quality,
 		"-preset", cfg.X11.Preset,
 	)
@@ -276,19 +292,21 @@ func buildX11Command(region, outputPath string, cfg *Config) (*exec.Cmd, error) 
 }
 
 func getWaylandActiveWindow() (string, error) {
-	if _, err := exec.LookPath("swaymsg"); err == nil {
+	if utils.CommandExists("swaymsg") {
 		cmd := exec.Command("swaymsg", "-t", "get_tree")
 		output, err := cmd.Output()
 		if err == nil {
 			_ = output
+			// TODO: Parse sway tree JSON to get focused window geometry
 		}
 	}
 
-	if _, err := exec.LookPath("hyprctl"); err == nil {
+	if utils.CommandExists("hyprctl") {
 		cmd := exec.Command("hyprctl", "activewindow", "-j")
 		output, err := cmd.Output()
 		if err == nil {
 			_ = output
+			// TODO: Parse hyprland JSON to get active window geometry
 		}
 	}
 
@@ -296,7 +314,7 @@ func getWaylandActiveWindow() (string, error) {
 }
 
 func getActiveWindowGeometry() (string, string, error) {
-	if _, err := exec.LookPath("xdotool"); err != nil {
+	if !utils.CommandExists("xdotool") {
 		return "", "", fmt.Errorf("xdotool not installed")
 	}
 
@@ -335,7 +353,7 @@ func getActiveWindowGeometry() (string, string, error) {
 	return geometry, offset, nil
 }
 
-func stopRecording(cfg *Config) error {
+func stopRecording(cfg *Config, notifCfg *config.NotificationConfig) error {
 	pidFile := "/tmp/ql_videorecord.pid"
 
 	data, err := os.ReadFile(pidFile)
@@ -371,13 +389,17 @@ func stopRecording(cfg *Config) error {
 	os.Remove(pidFile)
 
 	if cfg.ShowNotify {
-		notify("Video recording stopped", fmt.Sprintf("Saved to:\n%s", outputPath))
+		utils.NotifyWithConfig(notifCfg, "Video recording stopped", fmt.Sprintf("Saved to:\n%s", outputPath))
 	}
 
 	return nil
 }
 
 func getScreenResolution() string {
+	if !utils.CommandExists("xrandr") {
+		return "1920x1080"
+	}
+
 	cmd := exec.Command("xrandr")
 	output, err := cmd.Output()
 	if err != nil {
@@ -409,43 +431,13 @@ func getScreenResolution() string {
 }
 
 func detectAudioDevice() string {
-	if _, err := exec.LookPath("pw-cli"); err == nil {
+	if utils.CommandExists("pw-cli") {
 		return "pulse"
 	}
 
-	if _, err := exec.LookPath("pactl"); err == nil {
+	if utils.CommandExists("pactl") {
 		return "pulse"
 	}
 
 	return ""
-}
-
-func notify(title, message string) {
-	if _, err := exec.LookPath("notify-send"); err == nil {
-		exec.Command("notify-send", "ql videorecord", fmt.Sprintf("%s\n%s", title, message)).Run()
-	}
-}
-
-func showErrorNotification(title, message string) {
-	if _, err := exec.LookPath("dunstify"); err == nil {
-		cmd := exec.Command("dunstify",
-			"-u", "critical",
-			"-t", "10000",
-			title,
-			message)
-		cmd.Env = os.Environ()
-		cmd.Start()
-		return
-	}
-
-	if _, err := exec.LookPath("notify-send"); err == nil {
-		cmd := exec.Command("notify-send",
-			"-u", "critical",
-			"-t", "10000",
-			title,
-			message)
-		cmd.Env = os.Environ()
-		cmd.Start()
-		return
-	}
 }
