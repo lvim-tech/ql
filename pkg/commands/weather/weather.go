@@ -8,11 +8,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/lvim-tech/ql/pkg/commands"
+	"github.com/lvim-tech/ql/pkg/utils"
 	"github.com/mitchellh/mapstructure"
 )
 
@@ -51,6 +51,9 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		cfg.Locations = []string{"Sofia", "London", "New York"}
 	}
 
+	notifCfg := ctx.Config().GetNotificationConfig()
+
+	// Main loop - keeps showing menu until Back or ESC
 	for {
 		var items []string
 		items = append(items, "← Back")
@@ -58,113 +61,39 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 
 		choice, err := ctx.Show(items, "Weather Location")
 		if err != nil {
+			// ESC pressed - exit completely
 			return commands.CommandResult{Success: false}
 		}
 
 		if choice == "← Back" {
-			return commands.CommandResult{Success: false}
+			// Back pressed - return to module menu
+			return commands.CommandResult{
+				Success: false,
+				Error:   commands.ErrBack,
+			}
 		}
 
-		notifyID := showPersistentNotification("Weather", fmt.Sprintf("Fetching weather for %s.. .", choice))
+		notifyID := utils.ShowPersistentNotificationWithConfig(&notifCfg, "Weather", fmt.Sprintf("Fetching weather for %s.. .", choice))
 
 		weatherData, err := fetchWeather(choice, cfg.Options, cfg.Timeout)
 
-		closePersistentNotification(notifyID)
+		utils.ClosePersistentNotificationWithConfig(&notifCfg, notifyID)
 
 		if err != nil {
-			showErrorNotification("Weather Error", fmt.Sprintf("Failed to fetch weather for %s:\n%v", choice, err))
+			// Error fetching weather - show notification and loop back
+			utils.ShowErrorNotificationWithConfig(&notifCfg, "Weather Error", fmt.Sprintf("Failed to fetch weather for %s:\n%v", choice, err))
 			continue
 		}
 
-		if isatty() {
+		// Display weather data
+		if utils.IsTerminal() {
 			displayWeatherTerminal(weatherData)
 		} else {
 			displayWeatherGUI(weatherData)
 		}
 
+		// Weather displayed successfully - exit
 		return commands.CommandResult{Success: true}
-	}
-}
-
-func isatty() bool {
-	stdinInfo, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	stdinIsTTY := (stdinInfo.Mode() & os.ModeCharDevice) != 0
-
-	if !stdinIsTTY {
-		return false
-	}
-
-	tty, err := os.Open("/dev/tty")
-	if err != nil {
-		return false
-	}
-	tty.Close()
-
-	return true
-}
-
-func showPersistentNotification(title, message string) int {
-	notifyID := int(time.Now().UnixNano() % 1000000)
-
-	if _, err := exec.LookPath("dunstify"); err == nil {
-		cmd := exec.Command("dunstify",
-			"-u", "normal",
-			"-t", "0",
-			"-r", strconv.Itoa(notifyID),
-			title,
-			message)
-		cmd.Env = os.Environ()
-		cmd.Start()
-		return notifyID
-	}
-
-	if _, err := exec.LookPath("notify-send"); err == nil {
-		cmd := exec.Command("notify-send",
-			"-u", "normal",
-			"-t", "0",
-			title,
-			message)
-		cmd.Env = os.Environ()
-		cmd.Start()
-		return notifyID
-	}
-
-	return notifyID
-}
-
-func closePersistentNotification(notifyID int) {
-	if _, err := exec.LookPath("dunstify"); err == nil {
-		cmd := exec.Command("dunstify", "-C", strconv.Itoa(notifyID))
-		cmd.Env = os.Environ()
-		cmd.Run()
-		return
-	}
-}
-
-func showErrorNotification(title, message string) {
-	if _, err := exec.LookPath("dunstify"); err == nil {
-		cmd := exec.Command("dunstify",
-			"-u", "critical",
-			"-t", "10000",
-			title,
-			message)
-		cmd.Env = os.Environ()
-		cmd.Start()
-		return
-	}
-
-	if _, err := exec.LookPath("notify-send"); err == nil {
-		cmd := exec.Command("notify-send",
-			"-u", "critical",
-			"-t", "10000",
-			title,
-			message)
-		cmd.Env = os.Environ()
-		cmd.Start()
-		return
 	}
 }
 
@@ -178,7 +107,7 @@ func fetchWeather(location string, options string, timeout int) (string, error) 
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return "", fmt.Errorf("failed to create request:  %w", err)
 	}
 
 	req.Header.Set("User-Agent", "curl/7.88.0")
@@ -215,7 +144,7 @@ func displayWeatherTerminal(data string) error {
 }
 
 func displayWeatherGUI(data string) error {
-	if _, err := exec.LookPath("yad"); err == nil {
+	if utils.CommandExists("yad") {
 		tmpFile := "/tmp/ql-weather-data.txt"
 		if err := os.WriteFile(tmpFile, []byte(data), 0644); err == nil {
 			defer os.Remove(tmpFile)
@@ -232,8 +161,8 @@ func displayWeatherGUI(data string) error {
 		}
 	}
 
-	if _, err := exec.LookPath("zenity"); err == nil {
-		tmpFile := "/tmp/ql-weather-data.txt"
+	if utils.CommandExists("zenity") {
+		tmpFile := "/tmp/ql-weather-data. txt"
 		if err := os.WriteFile(tmpFile, []byte(data), 0644); err == nil {
 			defer os.Remove(tmpFile)
 
@@ -248,10 +177,10 @@ func displayWeatherGUI(data string) error {
 		}
 	}
 
-	terminal := detectTerminal()
+	terminal := utils.DetectTerminal()
 	if terminal != "" {
-		tmpScript := "/tmp/ql-weather. sh"
-		script := fmt.Sprintf("#!/bin/sh\ncat << 'EOF'\n%s\nEOF\necho ''\necho 'Press Enter to close...'\nread\n", data)
+		tmpScript := "/tmp/ql-weather.sh"
+		script := fmt.Sprintf("#!/bin/sh\ncat << 'EOF'\n%s\nEOF\necho ''\necho 'Press Enter to close... '\nread\n", data)
 
 		if err := os.WriteFile(tmpScript, []byte(script), 0755); err == nil {
 			defer os.Remove(tmpScript)
@@ -260,24 +189,4 @@ func displayWeatherGUI(data string) error {
 	}
 
 	return displayWeatherTerminal(data)
-}
-
-func detectTerminal() string {
-	terminals := []string{
-		"kitty",
-		"alacritty",
-		"foot",
-		"wezterm",
-		"gnome-terminal",
-		"konsole",
-		"xterm",
-	}
-
-	for _, term := range terminals {
-		if _, err := exec.LookPath(term); err == nil {
-			return term
-		}
-	}
-
-	return ""
 }

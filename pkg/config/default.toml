@@ -1,100 +1,74 @@
-# Default launcher (rofi, dmenu, fzf, bemenu, fuzzel)
-default_launcher = "rofi"
+# ql configuration file
 
-# Menu style:  "flat" or "grouped"
+default_launcher = "auto"
 menu_style = "grouped"
 
-# Module order (only for flat menu)
+# Module execution order (flat menu)
 module_order = [
     "power",
     "screenshot",
     "wifi",
-    #
     "radio",
     "mpc",
     "audiorecord",
     "videorecord",
-    #
     "weather",
 ]
 
-# Module groups (only for grouped menu)
-[module_groups.system]
-name = "System"
-icon = "󰒓 "
-description = "System utilities"
-modules = ["power", "screenshot"]
+# Module groups display order (grouped menu)
+module_groups_order = ["system", "network", "media", "info"]
 
-[module_groups.network]
-name = "Network"
-icon = "󰖩 "
-description = "Network & connectivity"
-modules = ["wifi"]
+# Notification settings
+[notifications]
+enabled = true
+tool = "auto"
+timeout = 5000
+urgency = "normal"
+show_in_terminal = false
 
-[module_groups.media]
-name = "Media"
-icon = "󰝚 "
-description = "Audio & Video"
-modules = ["radio", "mpc", "audiorecord", "videorecord"]
-
-[module_groups.info]
-name = "Info"
-icon = "󰋼 "
-description = "Information & utilities"
-modules = ["weather"]
-
-[module_groups.files]
-name = "Files"
-icon = "󰉋 "
-description = "File management"
-modules = []
-
-[module_groups.productivity]
-name = "Productivity"
-icon = "󰸘 "
-description = "Productivity tools"
-modules = []
-
-[module_groups.appearance]
-name = "Appearance"
-icon = "󰏘 "
-description = "Theme & customization"
-modules = []
-
-[module_groups.dev]
-name = "Development"
-icon = "󰅩 "
-description = "Developer tools"
-modules = []
-
-[module_groups.security]
-name = "Security"
-icon = "󰒃 "
-description = "Security & privacy"
-modules = []
-
-# Launcher configurations
+# Launcher-specific arguments
 [launchers.rofi]
 args = ["-dmenu", "-i", "-p"]
 
 [launchers.dmenu]
-args = ["-i", "-l", "10"]
+args = ["-i", "-p"]
 
 [launchers.fzf]
-args = ["--reverse", "--height=40%"]
+args = ["--prompt", "--height=40%", "--reverse"]
 
 [launchers.bemenu]
-args = ["-i", "-l", "10"]
+args = ["-i", "-p"]
 
 [launchers.fuzzel]
-args = ["--dmenu"]
+args = ["--dmenu", "--prompt"]
 
-# Power management module
+# Module groups (grouped menu)
+[module_groups.system]
+name = "System"
+enabled = true
+modules = ["power", "screenshot"]
+
+[module_groups.network]
+name = "Network"
+enabled = true
+modules = ["wifi"]
+
+[module_groups.media]
+name = "Media"
+enabled = true
+modules = ["radio", "mpc", "audiorecord", "videorecord"]
+
+[module_groups.info]
+name = "Info"
+enabled = true
+modules = ["weather"]
+
+# Power management configuration
 [commands.power]
 enabled = true
 show_logout = true
 show_suspend = true
-show_hibernate = true
+show_hibernate = false
 show_reboot = true
 show_shutdown = true
 confirm_logout = false
@@ -108,47 +82,122 @@ hibernate_command = "systemctl hibernate"
 reboot_command = "systemctl reboot"
 shutdown_command = "systemctl poweroff"
 
-# Screenshot module
+# Screenshot configuration
 [commands.screenshot]
 enabled = true
 save_dir = "~/Pictures/Screenshots"
 file_prefix = "screenshot"
 
-# Radio module
+# WiFi configuration
+[commands.wifi]
+enabled = true
+show_notify = true
+test_host = "1.1.1.1"
+test_count = 3
+test_wait = 2
+
+# Radio configuration
 [commands.radio]
 enabled = true
 volume = 70
 
-[commands.radio.stations]
-"Jazz FM" = "http://live.musictradio.com/JazzFMHigh"
-"Smooth FM" = "http://live.musictradio.com/SmoothFMHigh"
-"Classic FM" = "http://media-ice.musicradio.com/ClassicFMMP3"
+[commands.radio.radio_stations]
+# Chill / Downtempo
+"SomaFM Groove Salad" = "https://ice1.somafm.com/groovesalad-128-mp3"
+"SomaFM Drone Zone" = "https://ice1.somafm.com/dronezone-128-mp3"
+"Radio Paradise Main Mix" = "https://stream.radioparadise.com/mp3-128"
+"Radio Paradise Mellow Mix" = "https://stream.radioparadise.com/mellow-128"
+"Nightride FM" = "https://stream.nightride.fm/nightride.mp3"
 
-# WiFi module
-[commands.wifi]
-enabled = true
-test_host = "8.8.8.8"
-test_count = 3
-test_wait = 2
-show_notify = true
+# Electronic / Techno
+"SomaFM DEF CON Radio" = "https://ice1.somafm.com/defcon-128-mp3"
+"SomaFM Mission Control" = "https://ice1.somafm.com/missioncontrol-128-mp3"
+"DI.FM Techno" = "https://public.radio.co/stations/s45f52e6f7/listen"
+"Pure Techno Radio" = "https://listen.puretechnoradio.com/mp3"
+"TechnoBase FM" = "https://listen.technobase.fm/tunein-mp3"
 
-# MPC module
+# Ambient
+"SomaFM Space Station Soma" = "https://ice1.somafm.com/spacestation-128-mp3"
+"SomaFM Deep Space One" = "https://ice1.somafm.com/deepspaceone-128-mp3"
+"Ambient Sleeping Pill" = "https://radio.ambient.sleepingpill.org/ambient.mp3"
+"Radio Caprice Ambient" = "https://radio.caprice.fm/ambient.mp3"
+"StillStream Ambient" = "https://stillstream.com/ambient.mp3"
+
+# Rock / Alternative
+"Radio Paradise Rock Mix" = "https://stream.radioparadise.com/rock-128"
+"Classic Rock Florida" = "https://us4.internet-radio.com/proxy/crf128mp3"
+"Rock Antenne" = "https://mp3channels.webradio.rockantenne.de/rockantenne"
+"Planet Rock" = "https://stream.planetradio.co.uk/planetrock.mp3"
+"181.FM Rock" = "https://listen.181fm.com/181-rock_128k.mp3"
+
+# Metal
+"Metal Devastation Radio" = "https://ice24.securenetsystems.net/METALDEVASTATION"
+"Brutal Death Metal Radio" = "https://streaming.radio.co/s8b5f4d2a1/listen"
+"Metal Express Radio" = "https://s3.radio.co/s98f3c0d64/listen"
+"ChroniX Metal" = "https://stream.chronixradio.com/metal"
+"TotalRock Radio" = "https://s2.xrad.io/totalrock.mp3"
+
+# Jazz
+"Jazz24" = "https://live.wostreaming.net/direct/ppm-jazz24mp3-ibc1"
+"SomaFM Sonic Universe" = "https://ice1.somafm.com/sonicuniverse-128-mp3"
+"Radio Swiss Jazz" = "https://stream.srg-ssr.ch/m/rsp/mp3_128"
+"Smooth Jazz Florida" = "https://us4.internet-radio.com/proxy/sjf"
+"WBGO Jazz" = "https://wbgo.streamguys1.com/wbgo128"
+
+# Hip-Hop / R&B
+"Hot 97" = "https://stream.revma.ihrhls.com/zc1469"
+"Dash Hip Hop X" = "https://ice55.securenetsystems.net/DASH19"
+"181.FM Old School HipHop" = "https://listen.181fm.com/181-oldschool_128k.mp3"
+"Urban Radio" = "https://stream.urbanradio.com/urbanradio128"
+"Radio Caprice Hip-Hop" = "https://radio.caprice.fm/hiphop.mp3"
+
+# Classical
+"ABC Classic FM" = "https://live-radio01.mediahubaustralia.com/2FMW/mp3/"
+"Radio Swiss Classic" = "https://stream.srg-ssr.ch/m/rsc/mp3_128"
+"Classic FM UK" = "https://media-ice.musicradio.com/ClassicFMMP3"
+"Venice Classic Radio" = "https://uk2.streamingpulse.com/ssl/vcr1"
+"WQXR Classical" = "https://stream.wqxr.org/wqxr"
+
+# World / Folk / Ethno
+"Radio Caprice Folk" = "https://radio.caprice.fm/folk.mp3"
+"FIP Monde" = "https://icecast.radiofrance.fr/fipmonde-hifi.aac"
+"World Music Network" = "https://wmn.streamguys1.com/live"
+"Radio Aporee" = "https://radio.aporee.org:8000/aporee"
+"Ethno FM" = "https://ethnofm.ru:8000/ethnofm"
+
+# Reggae / Dub
+"Reggae141" = "https://reggae141.stream.laut.fm/reggae141"
+"Dubplate.fm" = "https://dubplate.fm/stream"
+"Radio Caprice Reggae" = "https://radio.caprice.fm/reggae.mp3"
+"Roots Reggae Radio" = "https://rootsreggaeradio.stream.laut.fm/rootsreggaeradio"
+"BigUp Radio" = "https://bigupradio.out.airtime.pro/bigupradio_a"
+
+# Synthwave / Retrowave
+"Nightride FM Synthwave" = "https://stream.nightride.fm/synthwave.mp3"
+"NewRetroWave" = "https://streaming.radionomy.com/NewRetroWave"
+"Radio Caprice Synthwave" = "https://radio.caprice.fm/synthwave.mp3"
+"DataWave FM" = "https://datawave.fm/mp3"
+"Retrowave One" = "https://retrowave.one/live"
+
+# MPC configuration
 [commands.mpc]
 enabled = true
-connection_type = "tcp"
-host = "192.168.1.10"
+connection_type = "socket"
+socket = "~/.local/state/mpd/socket"
+host = "localhost"
 port = "6600"
-current_playlist_cache = "~/.cache/ql/mpc_current_playlist.txt"
+password = ""
+current_playlist_cache = "~/.cache/ql/current_playlist"
 
-# Audio Record module
+# Audio recording configuration
 [commands.audiorecord]
 enabled = true
 save_dir = "~/Music/Recordings"
-file_prefix = "audio"
+file_prefix = "recording"
 format = "mp3"
 quality = "2"
 
-# Video Record module
+# Video recording configuration
 [commands.videorecord]
 enabled = true
 save_dir = "~/Videos/Recordings"
@@ -158,22 +207,22 @@ quality = "23"
 record_audio = true
 show_notify = true
 
-[commands.videorecord.x11]
-framerate = 60
-output_fps = 30
-preset = "ultrafast"
-video_codec = "libx264"
-audio_codec = "aac"
-
 [commands.videorecord.wayland]
-framerate = 60
-output_fps = 30
-preset = "ultrafast"
 video_codec = "libx264"
 audio_codec = "aac"
+preset = "fast"
+framerate = 30
 
+[commands.videorecord.x11]
+video_codec = "libx264"
+audio_codec = "aac"
+preset = "fast"
+framerate = 30
+output_fps = 30
+
+# Weather configuration
 [commands.weather]
 enabled = true
-locations = ["Sofia", "Varna", "Plovdiv", "London", "New York"]
-options = ""                                                    # wttr.in options: "lang=bg", "m" (metric), "format=3", etc.
-timeout = 30                                                    # HTTP request timeout in seconds
+locations = ["Sofia", "London", "New York"]
+options = ""
+timeout = 30

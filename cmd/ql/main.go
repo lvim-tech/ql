@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -27,18 +28,16 @@ func main() {
 }
 
 func run() error {
-	// Define flags
 	initFlag := flag.Bool("init", false, "Initialize user config")
 	versionFlag := flag.Bool("version", false, "Show version")
 	helpFlag := flag.Bool("help", false, "Show help")
 	flatFlag := flag.Bool("flat", false, "Use flat menu style")
 	groupedFlag := flag.Bool("grouped", false, "Use grouped menu style")
 	launcherFlag := flag.String("launcher", "", "Override launcher (rofi, dmenu, fzf, bemenu, fuzzel)")
-	groupFlag := flag.String("group", "", "Show only commands from specific group (system, media, network, info, etc.)")
+	groupFlag := flag.String("group", "", "Show only commands from specific group")
 
 	flag.Parse()
 
-	// Handle flags
 	if *initFlag {
 		return handleInit()
 	}
@@ -53,7 +52,6 @@ func run() error {
 		return nil
 	}
 
-	// Legacy positional argument support (for backward compatibility)
 	if len(os.Args) > 1 && !flag.Parsed() {
 		switch os.Args[1] {
 		case "init":
@@ -72,13 +70,11 @@ func run() error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Determine launcher:  --launcher > positional arg > config
 	launcherName := cfg.GetDefaultLauncher()
 
 	if *launcherFlag != "" {
 		launcherName = *launcherFlag
 	} else if len(flag.Args()) > 0 {
-		// Support legacy:  ql rofi
 		arg := flag.Args()[0]
 		if arg != "init" && arg != "version" && arg != "help" {
 			launcherName = arg
@@ -90,12 +86,10 @@ func run() error {
 		return fmt.Errorf("failed to create launcher: %w", err)
 	}
 
-	// If --group is specified, show only that group's commands
 	if *groupFlag != "" {
 		return runSpecificGroup(ctx, cfg, *groupFlag)
 	}
 
-	// Determine menu style: --flat/--grouped > config
 	menuStyle := cfg.GetMenuStyle()
 
 	if *flatFlag {
@@ -114,7 +108,6 @@ func run() error {
 func runSpecificGroup(ctx launcher.Launcher, cfg *config.Config, groupName string) error {
 	groups := cfg.GetModuleGroups()
 
-	// Find the group (case-insensitive)
 	var selectedGroup *config.ModuleGroup
 
 	for key, group := range groups {
@@ -125,12 +118,16 @@ func runSpecificGroup(ctx launcher.Launcher, cfg *config.Config, groupName strin
 	}
 
 	if selectedGroup == nil {
-		// List available groups
 		fmt.Fprintf(os.Stderr, "Error: Group '%s' not found\n\n", groupName)
 		fmt.Fprintf(os.Stderr, "Available groups:\n")
-		for key, group := range groups {
-			fmt.Fprintf(os.Stderr, "  %s (%s)\n", key, group.Name)
+
+		groupOrder := cfg.GetModuleGroupsOrder()
+		for _, key := range groupOrder {
+			if group, exists := groups[key]; exists {
+				fmt.Fprintf(os.Stderr, "  %s (%s)\n", key, group.Name)
+			}
 		}
+
 		return fmt.Errorf("group not found")
 	}
 
@@ -140,7 +137,6 @@ func runSpecificGroup(ctx launcher.Launcher, cfg *config.Config, groupName strin
 		commandMap[cmd.Name] = cmd
 	}
 
-	// Run the group menu directly WITHOUT back button
 	result := runModuleMenuDirect(ctx, cfg, *selectedGroup, commandMap)
 
 	if !result.Success && result.Error != nil {
@@ -192,6 +188,7 @@ func runFlatMenu(ctx launcher.Launcher, cfg *config.Config) error {
 
 		choice, err := ctx.Show(options, "ql")
 		if err != nil {
+			// ESC pressed - exit
 			return nil
 		}
 
@@ -201,15 +198,10 @@ func runFlatMenu(ctx launcher.Launcher, cfg *config.Config) error {
 			continue
 		}
 
-		result := cmd.Run(ctx)
+		_ = cmd.Run(ctx)
 
-		if result.Success {
-			return nil
-		}
-
-		if result.Error != nil {
-			showErrorNotification("Error", result.Error.Error())
-		}
+		// Command finished - exit
+		return nil
 	}
 }
 
@@ -229,11 +221,18 @@ func runGroupedMenu(ctx launcher.Launcher, cfg *config.Config) error {
 		return runFlatMenu(ctx, cfg)
 	}
 
+	groupOrder := cfg.GetModuleGroupsOrder()
+
 	for {
 		var groupOptions []string
 		groupMap := make(map[string]config.ModuleGroup)
 
-		for _, group := range groups {
+		for _, groupKey := range groupOrder {
+			group, exists := groups[groupKey]
+			if !exists {
+				continue
+			}
+
 			hasEnabled := false
 			for _, moduleName := range group.Modules {
 				if isCommandEnabled(cfg, moduleName) {
@@ -243,9 +242,8 @@ func runGroupedMenu(ctx launcher.Launcher, cfg *config.Config) error {
 			}
 
 			if hasEnabled {
-				label := fmt.Sprintf("%s %s", group.Icon, group.Name)
-				groupOptions = append(groupOptions, label)
-				groupMap[label] = group
+				groupOptions = append(groupOptions, group.Name)
+				groupMap[group.Name] = group
 			}
 		}
 
@@ -255,33 +253,38 @@ func runGroupedMenu(ctx launcher.Launcher, cfg *config.Config) error {
 
 		groupChoice, err := ctx.Show(groupOptions, "ql")
 		if err != nil {
+			// ESC at group level - exit
 			return nil
 		}
 
-		selectedGroup := groupMap[groupChoice]
+		selectedGroup, exists := groupMap[groupChoice]
+		if !exists {
+			showErrorNotification("Error", fmt.Sprintf("Unknown group: %s", groupChoice))
+			continue
+		}
 
-		// Run with back button (navigates back to group selection)
 		result := runModuleMenuWithBack(ctx, cfg, selectedGroup, commandMap)
 
 		if result.Success {
+			// Command succeeded - exit
 			return nil
 		}
 
-		if result.Error != nil {
-			showErrorNotification("Error", result.Error.Error())
+		// Check error type
+		if errors.Is(result.Error, commands.ErrBack) {
+			// User pressed "← Back" at module level - continue loop (show groups again)
+			continue
 		}
 
-		// Loop continues - shows group menu again
+		// Any other case (ESC, error, nil) - exit
+		return nil
 	}
 }
 
-// runModuleMenuDirect shows module menu WITHOUT back button (for direct group access)
 func runModuleMenuDirect(ctx launcher.Launcher, cfg *config.Config, group config.ModuleGroup, commandMap map[string]commands.Command) commands.CommandResult {
 	for {
 		var moduleOptions []string
 		moduleToCommand := make(map[string]commands.Command)
-
-		// NO back button
 
 		for _, moduleName := range group.Modules {
 			cmd, exists := commandMap[moduleName]
@@ -306,7 +309,7 @@ func runModuleMenuDirect(ctx launcher.Launcher, cfg *config.Config, group config
 
 		moduleChoice, err := ctx.Show(moduleOptions, group.Name)
 		if err != nil {
-			// User cancelled - exit
+			// ESC pressed - exit
 			return commands.CommandResult{Success: false}
 		}
 
@@ -318,19 +321,11 @@ func runModuleMenuDirect(ctx launcher.Launcher, cfg *config.Config, group config
 
 		result := cmd.Run(ctx)
 
-		if result.Success {
-			return result
-		}
-
-		if result.Error != nil {
-			showErrorNotification("Error", result.Error.Error())
-		}
-
-		// Loop continues - shows same group menu again
+		// Command finished - exit (don't loop back)
+		return result
 	}
 }
 
-// runModuleMenuWithBack shows module menu WITH back button (for grouped menu navigation)
 func runModuleMenuWithBack(ctx launcher.Launcher, cfg *config.Config, group config.ModuleGroup, commandMap map[string]commands.Command) commands.CommandResult {
 	for {
 		var moduleOptions []string
@@ -361,11 +356,16 @@ func runModuleMenuWithBack(ctx launcher.Launcher, cfg *config.Config, group conf
 
 		moduleChoice, err := ctx.Show(moduleOptions, group.Name)
 		if err != nil {
-			return commands.CommandResult{Success: false}
+			// ESC pressed - exit completely
+			return commands.CommandResult{Success: false, Error: commands.ErrCancelled}
 		}
 
 		if moduleChoice == "← Back" {
-			return commands.CommandResult{Success: false}
+			// Back button at module level - return to group menu
+			return commands.CommandResult{
+				Success: false,
+				Error:   commands.ErrBack,
+			}
 		}
 
 		cmd, ok := moduleToCommand[moduleChoice]
@@ -376,13 +376,18 @@ func runModuleMenuWithBack(ctx launcher.Launcher, cfg *config.Config, group conf
 
 		result := cmd.Run(ctx)
 
+		// If command succeeded, exit
 		if result.Success {
 			return result
 		}
 
-		if result.Error != nil {
-			showErrorNotification("Error", result.Error.Error())
+		// If command returned ErrBack, loop back to module menu (System)
+		if errors.Is(result.Error, commands.ErrBack) {
+			continue
 		}
+
+		// Any other error (cancelled, etc.) - exit completely
+		return result
 	}
 }
 
@@ -431,7 +436,7 @@ func handleInit() error {
 	}
 
 	configPath := config.GetUserConfigPath()
-	fmt.Printf("Config initialized at:  %s\n", configPath)
+	fmt.Printf("Config initialized at: %s\n", configPath)
 	fmt.Println("\nYou can now edit the config file to customize ql.")
 	fmt.Println("Run 'ql' to start using it!")
 
@@ -445,7 +450,7 @@ func printHelp() {
 	fmt.Println("  ql [options]")
 	fmt.Println()
 	fmt.Println("Options:")
-	fmt.Println("  --init              Initialize user config (~/.config/ql/config. toml)")
+	fmt.Println("  --init              Initialize user config (~/.config/ql/config.toml)")
 	fmt.Println("  --version           Show version information")
 	fmt.Println("  --help              Show this help message")
 	fmt.Println("  --flat              Use flat menu style")
@@ -454,7 +459,7 @@ func printHelp() {
 	fmt.Println("  --group NAME        Show only commands from specific group")
 	fmt.Println()
 	fmt.Println("Available groups:")
-	fmt.Println("  system, network, media, info, files, productivity, appearance, dev, security")
+	fmt.Println("  system, network, media, info")
 	fmt.Println()
 	fmt.Println("Legacy usage (still supported):")
 	fmt.Println("  ql [launcher]       Run ql with specified launcher")
@@ -465,9 +470,9 @@ func printHelp() {
 	fmt.Println("Examples:")
 	fmt.Println("  ql --flat --launcher rofi")
 	fmt.Println("  ql --grouped")
-	fmt.Println("  ql --group media           # Show only media commands")
+	fmt.Println("  ql --group media")
 	fmt.Println("  ql --group system --launcher fuzzel")
-	fmt.Println("  ql rofi                     # Legacy style")
+	fmt.Println("  ql rofi")
 	fmt.Println()
-	fmt.Println("Config file: ~/.config/ql/config.toml")
+	fmt.Println("Config file: ~/.config/ql/config. toml")
 }
