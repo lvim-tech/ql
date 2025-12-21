@@ -2,7 +2,7 @@
 
 # DEFAULTS
 default_launcher = "auto"
-menu_style = "grouped"
+menu_style = "grouped"    # flat, grouped
 
 pdf_viewer = "zathura"
 browser = "qutebrowser"
@@ -17,15 +17,18 @@ module_groups_order = ["system", "network", "media", "info"]
 # MODULE EXECUTION ORDER (flat menu)
 module_order = [
     "power",
+    "usb",
+    "kill",
     "clipboard",
     "screenshot",
-    "calendar",
     "wifi",
+    "netstat",
     "radio",
     "mpc",
     "audiorecord",
     "videorecord",
     "weather",
+    "man",
 ]
 # MODULE EXECUTION ORDER (flat menu)
 
@@ -115,7 +118,7 @@ file_prefix = "screenshot"
 [module_groups.network]
 name = "Network"
 enabled = true
-modules = ["wifi", "netstat"]
+modules = ["wifi", "bookman", "netstat"]
 
 # WIFI
 [commands.wifi]
@@ -125,6 +128,21 @@ test_host = "1.1.1.1"
 test_count = 3
 test_wait = 2
 # WIFI
+
+# BOOKMAN
+[commands.bookman]
+enabled = true
+
+[[commands.bookman.sources]]
+name = "Qutebrowser Quickmarks"
+path = "~/.config/qutebrowser/quickmarks"
+format = "qutebrowser_quickmarks"
+
+[[commands.bookman.sources]]
+name = "Qutebrowser Bookmarks"
+path = "~/.config/qutebrowser/bookmarks/urls"
+format = "qutebrowser_bookmarks"
+# BOOKMAN
 
 # NETSTAT
 [commands.netstat]

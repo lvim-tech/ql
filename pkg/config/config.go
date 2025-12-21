@@ -300,3 +300,7 @@ func (c *Config) GetWifiConfig() any {
 func (c *Config) GetNetstatConfig() any {
 	return c.Commands["netstat"]
 }
+
+func (c *Config) GetBookmanConfig() any {
+	return c.Commands["bookman"]
+}
