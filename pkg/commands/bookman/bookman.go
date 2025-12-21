@@ -3,24 +3,28 @@ package bookman
 
 import (
 	"bufio"
+	"database/sql"
+	"encoding/json"
 	"fmt"
+	"github.com/lvim-tech/ql/pkg/commands"
+	"github.com/lvim-tech/ql/pkg/utils"
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/mitchellh/mapstructure"
 	"os"
 	"os/exec"
 	"strings"
-
-	"github.com/lvim-tech/ql/pkg/commands"
-	"github.com/lvim-tech/ql/pkg/utils"
-	"github.com/mitchellh/mapstructure"
 )
 
+// Entry represents a menu entry/bookmark.
 type Entry struct {
 	Source  string
 	Display string
 	URL     string
 }
 
-const sepString = "----------"
+const sepString = "********************"
 
+// Register the bookman command at initialization
 func init() {
 	commands.Register(commands.Command{
 		Name:        "bookman",
@@ -29,7 +33,9 @@ func init() {
 	})
 }
 
-// Run implements the bookman logic according to config & sources
+// Run implements the bookman logic according to config & sources.
+// It aggregates bookmarks/quickmarks/entries from all configured sources
+// and opens a selected URL in the browser defined in the global config.
 func Run(ctx commands.LauncherContext) commands.CommandResult {
 	cfgInterface := ctx.Config().GetBookmanConfig()
 
@@ -59,7 +65,7 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 	for _, src := range cfg.Sources {
 		entries, err := parseSource(src)
 		if err != nil {
-			// Може да покажеш notification за грешка, но продължаваш!
+			// Show a notification for a failed source, but continue with remaining sources.
 			utils.ShowErrorNotificationWithConfig(&notifCfg, "Bookman", fmt.Sprintf("Failed: %s (%s)", src.Name, err))
 			continue
 		}
@@ -75,7 +81,7 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 	}
 
-	// Премахни trailing separator
+	// Remove trailing separator(s)
 	for len(allEntries) > 0 && allEntries[len(allEntries)-1].Display == sepString {
 		allEntries = allEntries[:len(allEntries)-1]
 	}
@@ -84,12 +90,12 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		return commands.CommandResult{Success: false}
 	}
 
+	// Build menu items for selection (adding group separators, source info, Back if not direct launch)
 	var items []string
 	if !ctx.IsDirectLaunch() {
 		items = append(items, "← Back")
 	}
 	for _, e := range allEntries {
-		// Можеш да маркираш източника
 		if e.Display == sepString {
 			items = append(items, sepString)
 			continue
@@ -97,6 +103,7 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		items = append(items, fmt.Sprintf("[%s] %s", e.Source, e.Display))
 	}
 
+	// Let the user select an item
 	choice, err := ctx.Show(items, "Bookman")
 	if err != nil || choice == "" {
 		return commands.CommandResult{Success: false}
@@ -111,7 +118,7 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		return commands.CommandResult{Success: true}
 	}
 
-	// Последното "слово" е URL
+	// Extract the URL (always the last http(s) word)
 	url := ""
 	fields := strings.Fields(choice)
 	for i := len(fields) - 1; i >= 0; i-- {
@@ -126,13 +133,8 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		return commands.CommandResult{Success: false}
 	}
 
+	// Use the globally configured browser
 	browser := ctx.Config().GetBrowser()
-	if browser == "" {
-		browser = "qutebrowser"
-	}
-	go func() {
-		_ = exec.Command(browser, url).Start()
-	}()
 	if browser == "" {
 		browser = "qutebrowser"
 	}
@@ -141,7 +143,7 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 	return commands.CommandResult{Success: true}
 }
 
-// Парсира един source според format
+// parseSource determines which format parser to call based on source.Format.
 func parseSource(src Source) ([]Entry, error) {
 	path := utils.ExpandHomeDir(src.Path)
 	switch src.Format {
@@ -149,13 +151,16 @@ func parseSource(src Source) ([]Entry, error) {
 		return parseQuteQuickmarks(src.Name, path)
 	case "qutebrowser_bookmarks":
 		return parseQuteBookmarks(src.Name, path)
-	// case "firefox_sqlite":
-	// Тук постави парсинг за Firefox bookmarks със sqlite ако желаеш!
+	case "chrome_bookmarks_json":
+		return parseChromeBookmarksJSON(src.Name, path)
+	case "firefox_sqlite":
+		return parseFirefoxBookmarks(src.Name, path)
 	default:
 		return nil, fmt.Errorf("unknown source format: %s", src.Format)
 	}
 }
 
+// parseQuteQuickmarks parses qutebrowser quickmarks (plain text: <key> <url> per line)
 func parseQuteQuickmarks(srcName, path string) ([]Entry, error) {
 	lines, err := readLines(path)
 	if err != nil {
@@ -175,6 +180,7 @@ func parseQuteQuickmarks(srcName, path string) ([]Entry, error) {
 	return result, nil
 }
 
+// parseQuteBookmarks parses qutebrowser bookmarks (plain text: <url> <title...>)
 func parseQuteBookmarks(srcName, path string) ([]Entry, error) {
 	lines, err := readLines(path)
 	if err != nil {
@@ -196,7 +202,104 @@ func parseQuteBookmarks(srcName, path string) ([]Entry, error) {
 	return result, nil
 }
 
-// Simple txt file to string slice
+// parseChromeBookmarksJSON parses Chrome/Brave/Chromium bookmarks as found in their Bookmarks JSON file
+func parseChromeBookmarksJSON(srcName, path string) ([]Entry, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	// Recursive structure for folders/bookmarks
+	type ChromeItem struct {
+		Name     string       `json:"name"`
+		URL      string       `json:"url"`
+		Type     string       `json:"type"`
+		Children []ChromeItem `json:"children"`
+	}
+	var bm struct {
+		Roots struct {
+			BookmarkBar ChromeItem `json:"bookmark_bar"`
+			Other       ChromeItem `json:"other"`
+		} `json:"roots"`
+	}
+
+	if err := json.NewDecoder(f).Decode(&bm); err != nil {
+		return nil, err
+	}
+
+	var result []Entry
+	var parse func(folder ChromeItem)
+	parse = func(folder ChromeItem) {
+		for _, c := range folder.Children {
+			if c.Type == "url" && c.URL != "" {
+				result = append(result, Entry{
+					Source:  srcName,
+					Display: fmt.Sprintf("[C] %s - %s", c.Name, c.URL),
+					URL:     c.URL,
+				})
+			} else if c.Type == "folder" && len(c.Children) > 0 {
+				parse(c)
+			}
+		}
+	}
+	parse(bm.Roots.BookmarkBar)
+	parse(bm.Roots.Other)
+
+	return result, nil
+}
+
+// parseFirefoxBookmarks parses bookmarks from a Firefox places.sqlite file using go-sqlite3.
+// Returns the newest 200 bookmarks with titles.
+func parseFirefoxBookmarks(srcName, path string) ([]Entry, error) {
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "BOOKMAN DEBUG: sqlite open error for %q: %v\n", path, err)
+		return nil, fmt.Errorf("open sqlite: %w", err)
+	}
+	defer db.Close()
+
+	const q = `
+	SELECT b.title, p.url
+	FROM moz_bookmarks b
+	JOIN moz_places p ON b.fk = p.id
+	WHERE b.type = 1 AND p.url LIKE 'http%'
+	ORDER BY b.dateAdded DESC
+	LIMIT 200
+	`
+	rows, err := db.Query(q)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "BOOKMAN DEBUG: sqlite query error: %v\n", err)
+		return nil, fmt.Errorf("sqlite query: %w", err)
+	}
+	defer rows.Close()
+
+	var result []Entry
+	count := 0
+	for rows.Next() {
+		var title, url string
+		if err := rows.Scan(&title, &url); err != nil {
+			continue
+		}
+		if title == "" {
+			title = "[untitled]"
+		}
+		count++
+		result = append(result, Entry{
+			Source:  srcName,
+			Display: fmt.Sprintf("[F] %s - %s", title, url),
+			URL:     url,
+		})
+	}
+	fmt.Fprintf(os.Stderr, "BOOKMAN DEBUG: Firefox loaded %d entries\n", count)
+	if err := rows.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "BOOKMAN DEBUG: rows error: %v\n", err)
+		return result, err
+	}
+	return result, nil
+}
+
+// readLines reads a text file into a slice of strings (one per line).
 func readLines(filename string) ([]string, error) {
 	f, err := os.Open(filename)
 	if err != nil {
