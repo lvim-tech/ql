@@ -54,24 +54,33 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 
 	notifCfg := ctx.Config().GetNotificationConfig()
 
-	// Main loop - keeps showing menu until Back, ESC, or successful action
+	// Check for direct command
+	args := ctx.Args()
+	if len(args) > 0 {
+		return executeDirectCommand(ctx, args, &cfg, &notifCfg)
+	}
+
 	for {
-		options := []string{
-			"← Back",
+		var options []string
+
+		if !ctx.IsDirectLaunch() {
+			options = append(options, "← Back")
+		}
+
+		options = append(options,
 			"Connect to Network",
 			"Disconnect",
 			"Show Current Connection",
 			"Toggle WiFi",
-		}
+		)
 
 		choice, err := ctx.Show(options, "WiFi")
 		if err != nil {
-			// ESC pressed - exit completely
+			// ESC pressed at main menu - exit completely
 			return commands.CommandResult{Success: false}
 		}
 
 		if choice == "← Back" {
-			// Back pressed - return to module menu
 			return commands.CommandResult{
 				Success: false,
 				Error:   commands.ErrBack,
@@ -94,12 +103,11 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 
 		if actionErr != nil {
-			// Check if user cancelled in submenu
+			// If error is "cancelled" - it's ESC from submenu, exit completely
 			if actionErr.Error() == "cancelled" {
-				// Loop back to main menu
-				continue
+				return commands.CommandResult{Success: false}
 			}
-			// Other error - show notification and loop back
+			// Other error - show and loop back
 			utils.ShowErrorNotificationWithConfig(&notifCfg, "WiFi Error", actionErr.Error())
 			continue
 		}
@@ -107,6 +115,118 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		// Action succeeded - exit
 		return commands.CommandResult{Success: true}
 	}
+}
+
+func executeDirectCommand(ctx commands.LauncherContext, args []string, cfg *Config, notifCfg *config.NotificationConfig) commands.CommandResult {
+	action := strings.ToLower(args[0])
+
+	var err error
+
+	switch action {
+	case "connect":
+		// If SSID is provided, connect directly
+		if len(args) > 1 {
+			ssid := strings.Join(args[1:], " ")
+			// Check if password is provided via args (not recommended but possible)
+			err = connectToNetworkDirect(ssid, "", cfg, notifCfg)
+		} else {
+			// Otherwise show network selection menu
+			err = connectToNetwork(ctx, cfg, notifCfg)
+		}
+
+	case "disconnect", "off":
+		err = disconnect(cfg, notifCfg)
+
+	case "status", "current", "info":
+		err = showCurrentConnection(cfg, notifCfg)
+
+	case "toggle":
+		err = toggleWifi(cfg, notifCfg)
+
+	case "on":
+		err = setWifiState(true, cfg, notifCfg)
+
+	default:
+		return commands.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("unknown wifi action: %s (use:   connect, disconnect, status, toggle, on, off)", action),
+		}
+	}
+
+	if err != nil {
+		return commands.CommandResult{Success: false, Error: err}
+	}
+
+	return commands.CommandResult{Success: true}
+}
+
+func connectToNetworkDirect(ssid, password string, cfg *Config, notifCfg *config.NotificationConfig) error {
+	var cmd *exec.Cmd
+
+	if password != "" {
+		cmd = exec.Command("nmcli", "dev", "wifi", "connect", ssid, "password", password)
+	} else {
+		cmd = exec.Command("nmcli", "dev", "wifi", "connect", ssid)
+	}
+
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		if strings.Contains(string(output), "Secrets were required") ||
+			strings.Contains(string(output), "password") {
+
+			promptedPassword, passErr := utils.PromptPassword(fmt.Sprintf("Password for %s", ssid))
+			if passErr != nil || promptedPassword == "" {
+				return fmt.Errorf("password required but not provided")
+			}
+
+			cmd = exec.Command("nmcli", "dev", "wifi", "connect", ssid, "password", promptedPassword)
+			output, err = cmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("failed to connect: %s", strings.TrimSpace(string(output)))
+			}
+		} else {
+			return fmt.Errorf("failed to connect: %s", strings.TrimSpace(string(output)))
+		}
+	}
+
+	if cfg.ShowNotify {
+		utils.NotifyWithConfig(notifCfg, "WiFi Connected", ssid)
+	}
+
+	if cfg.TestHost != "" {
+		if testErr := testConnection(cfg); testErr != nil {
+			if cfg.ShowNotify {
+				utils.ShowErrorNotificationWithConfig(notifCfg, "WiFi Warning", fmt.Sprintf("Connected but no internet:        %v", testErr))
+			}
+		}
+	}
+
+	return nil
+}
+
+func setWifiState(enable bool, cfg *Config, notifCfg *config.NotificationConfig) error {
+	var cmd *exec.Cmd
+	var newState string
+
+	if enable {
+		cmd = exec.Command("nmcli", "radio", "wifi", "on")
+		newState = "enabled"
+	} else {
+		cmd = exec.Command("nmcli", "radio", "wifi", "off")
+		newState = "disabled"
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to set WiFi state: %s", strings.TrimSpace(string(output)))
+	}
+
+	if cfg.ShowNotify {
+		utils.NotifyWithConfig(notifCfg, "WiFi", fmt.Sprintf("WiFi %s", newState))
+	}
+
+	return nil
 }
 
 func connectToNetwork(ctx commands.LauncherContext, cfg *Config, notifCfg *config.NotificationConfig) error {
@@ -136,50 +256,16 @@ func connectToNetwork(ctx commands.LauncherContext, cfg *Config, notifCfg *confi
 
 	choice, err := ctx.Show(networks, "Select Network")
 	if err != nil {
-		// ESC pressed in network selection
+		// ESC pressed - return "cancelled" to exit completely
 		return fmt.Errorf("cancelled")
 	}
 
 	if choice == "← Back" {
-		// Back pressed in network selection
+		// Back pressed - return "cancelled" to loop back
 		return fmt.Errorf("cancelled")
 	}
 
-	cmd = exec.Command("nmcli", "dev", "wifi", "connect", choice)
-	output, err = cmd.CombinedOutput()
-
-	if err != nil {
-		if strings.Contains(string(output), "Secrets were required") ||
-			strings.Contains(string(output), "password") {
-
-			password, passErr := utils.PromptPassword("WiFi Password")
-			if passErr != nil || password == "" {
-				return fmt.Errorf("password required but not provided")
-			}
-
-			cmd = exec.Command("nmcli", "dev", "wifi", "connect", choice, "password", password)
-			output, err = cmd.CombinedOutput()
-			if err != nil {
-				return fmt.Errorf("failed to connect: %s", strings.TrimSpace(string(output)))
-			}
-		} else {
-			return fmt.Errorf("failed to connect: %s", strings.TrimSpace(string(output)))
-		}
-	}
-
-	if cfg.ShowNotify {
-		utils.NotifyWithConfig(notifCfg, "WiFi Connected", choice)
-	}
-
-	if cfg.TestHost != "" {
-		if testErr := testConnection(cfg); testErr != nil {
-			if cfg.ShowNotify {
-				utils.ShowErrorNotificationWithConfig(notifCfg, "WiFi Warning", fmt.Sprintf("Connected but no internet: %v", testErr))
-			}
-		}
-	}
-
-	return nil
+	return connectToNetworkDirect(choice, "", cfg, notifCfg)
 }
 
 func disconnect(cfg *Config, notifCfg *config.NotificationConfig) error {
@@ -233,7 +319,7 @@ func showCurrentConnection(cfg *Config, notifCfg *config.NotificationConfig) err
 		if strings.Contains(line, "802-11-wireless") || strings.Contains(line, "wireless") {
 			parts := strings.Split(line, ":")
 			if len(parts) >= 3 {
-				wifiInfo = fmt.Sprintf("Network: %s\nDevice: %s", parts[0], parts[2])
+				wifiInfo = fmt.Sprintf("Network: %s\nDevice:  %s", parts[0], parts[2])
 				break
 			}
 		}
@@ -258,26 +344,11 @@ func toggleWifi(cfg *Config, notifCfg *config.NotificationConfig) error {
 	}
 
 	state := strings.TrimSpace(string(output))
-	var newState string
 
 	if state == "enabled" {
-		cmd = exec.Command("nmcli", "radio", "wifi", "off")
-		newState = "disabled"
-	} else {
-		cmd = exec.Command("nmcli", "radio", "wifi", "on")
-		newState = "enabled"
+		return setWifiState(false, cfg, notifCfg)
 	}
-
-	output, err = cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to toggle WiFi: %s", strings.TrimSpace(string(output)))
-	}
-
-	if cfg.ShowNotify {
-		utils.NotifyWithConfig(notifCfg, "WiFi", fmt.Sprintf("WiFi %s", newState))
-	}
-
-	return nil
+	return setWifiState(true, cfg, notifCfg)
 }
 
 func testConnection(cfg *Config) error {
@@ -292,7 +363,7 @@ func testConnection(cfg *Config) error {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("connection test failed: %s", strings.TrimSpace(string(output)))
+		return fmt.Errorf("connection test failed:   %s", strings.TrimSpace(string(output)))
 	}
 
 	return nil

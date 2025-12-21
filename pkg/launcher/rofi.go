@@ -10,15 +10,17 @@ import (
 )
 
 type Rofi struct {
-	config *config.Config
+	baseLauncher // <-- ДОБАВИ ТОВА
 }
 
 func NewRofi(cfg *config.Config) *Rofi {
-	return &Rofi{config: cfg}
+	return &Rofi{
+		baseLauncher: baseLauncher{cfg: cfg},
+	}
 }
 
 func (r *Rofi) Show(options []string, prompt string) (string, error) {
-	launcherCfg := r.config.GetLauncherConfig("rofi")
+	launcherCfg := r.cfg.GetLauncherConfig("rofi")
 	args := append(launcherCfg.Args, prompt)
 
 	cmd := exec.Command("rofi", args...)
@@ -61,6 +63,4 @@ func (r *Rofi) Show(options []string, prompt string) (string, error) {
 	return choice, nil
 }
 
-func (r *Rofi) Config() *config.Config {
-	return r.config
-}
+// Config() вече идва от baseLauncher - премахни го

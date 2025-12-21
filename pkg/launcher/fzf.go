@@ -11,15 +11,17 @@ import (
 )
 
 type Fzf struct {
-	config *config.Config
+	baseLauncher
 }
 
 func NewFzf(cfg *config.Config) *Fzf {
-	return &Fzf{config: cfg}
+	return &Fzf{
+		baseLauncher: baseLauncher{cfg: cfg},
+	}
 }
 
 func (f *Fzf) Show(options []string, prompt string) (string, error) {
-	launcherCfg := f.config.GetLauncherConfig("fzf")
+	launcherCfg := f.cfg.GetLauncherConfig("fzf")
 	args := append(launcherCfg.Args, "--prompt", prompt+"> ")
 
 	cmd := exec.Command("fzf", args...)
@@ -27,7 +29,7 @@ func (f *Fzf) Show(options []string, prompt string) (string, error) {
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return "", fmt.Errorf("failed to create stdin pipe: %w", err)
+		return "", fmt.Errorf("failed to create stdin pipe:  %w", err)
 	}
 
 	stdout, err := cmd.StdoutPipe()
@@ -39,13 +41,11 @@ func (f *Fzf) Show(options []string, prompt string) (string, error) {
 		return "", fmt.Errorf("failed to start fzf: %w", err)
 	}
 
-	// Write options to stdin
 	for _, option := range options {
 		fmt.Fprintln(stdin, option)
 	}
 	stdin.Close()
 
-	// Read selection
 	scanner := bufio.NewScanner(stdout)
 	var choice string
 	if scanner.Scan() {
@@ -61,8 +61,4 @@ func (f *Fzf) Show(options []string, prompt string) (string, error) {
 	}
 
 	return choice, nil
-}
-
-func (f *Fzf) Config() *config.Config {
-	return f.config
 }

@@ -51,12 +51,20 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 
 	notifCfg := ctx.Config().GetNotificationConfig()
 
+	// Check for direct command
+	args := ctx.Args()
+	if len(args) > 0 {
+		return executeDirectCommand(args[0], &cfg, &notifCfg)
+	}
+
 	for {
-		options := []string{
-			"← Back",
-			"Start Recording",
-			"Stop Recording",
+		var options []string
+
+		if !ctx.IsDirectLaunch() {
+			options = append(options, "← Back")
 		}
+
+		options = append(options, "Start Recording", "Stop Recording")
 
 		choice, err := ctx.Show(options, "Audio Record")
 		if err != nil {
@@ -65,7 +73,6 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 
 		if choice == "← Back" {
-			// Back pressed - return to module menu
 			return commands.CommandResult{
 				Success: false,
 				Error:   commands.ErrBack,
@@ -84,7 +91,7 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 
 		if actionErr != nil {
-			// Error occurred - show notification and loop back to menu
+			// Show error and loop back to menu
 			utils.ShowErrorNotificationWithConfig(&notifCfg, "Audio Record Error", actionErr.Error())
 			continue
 		}
@@ -92,6 +99,28 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		// Action succeeded - exit
 		return commands.CommandResult{Success: true}
 	}
+}
+
+func executeDirectCommand(action string, cfg *Config, notifCfg *config.NotificationConfig) commands.CommandResult {
+	var err error
+
+	switch strings.ToLower(action) {
+	case "start":
+		err = startRecording(cfg, notifCfg)
+	case "stop":
+		err = stopRecording(notifCfg)
+	default:
+		return commands.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("unknown audiorecord action: %s (use 'start' or 'stop')", action),
+		}
+	}
+
+	if err != nil {
+		return commands.CommandResult{Success: false, Error: err}
+	}
+
+	return commands.CommandResult{Success: true}
 }
 
 func startRecording(cfg *Config, notifCfg *config.NotificationConfig) error {
@@ -121,7 +150,7 @@ func startRecording(cfg *Config, notifCfg *config.NotificationConfig) error {
 	args := []string{
 		"-f", "pulse",
 		"-i", "default",
-		"-q: a", cfg.Quality,
+		"-q:a", cfg.Quality,
 		"-y",
 		outputPath,
 	}
@@ -141,7 +170,7 @@ func startRecording(cfg *Config, notifCfg *config.NotificationConfig) error {
 	}
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start recording: %w", err)
+		return fmt.Errorf("failed to start recording:  %w", err)
 	}
 
 	pidFile := getPIDFile()

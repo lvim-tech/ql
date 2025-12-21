@@ -50,22 +50,31 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 
 	notifCfg := ctx.Config().GetNotificationConfig()
 
-	// Main loop - keeps showing menu until Back, ESC, or successful action
+	// Check for direct command
+	args := ctx.Args()
+	if len(args) > 0 {
+		return executeDirectCommand(ctx, args, &cfg, &notifCfg)
+	}
+
 	for {
-		options := []string{
-			"← Back",
+		var options []string
+
+		if !ctx.IsDirectLaunch() {
+			options = append(options, "← Back")
+		}
+
+		options = append(options,
 			"Start Recording",
 			"Stop Recording",
-		}
+		)
 
 		choice, err := ctx.Show(options, "Video Record")
 		if err != nil {
-			// ESC pressed - exit completely
+			// ESC pressed at main menu - exit completely
 			return commands.CommandResult{Success: false}
 		}
 
 		if choice == "← Back" {
-			// Back pressed - return to module menu
 			return commands.CommandResult{
 				Success: false,
 				Error:   commands.ErrBack,
@@ -84,12 +93,11 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 
 		if actionErr != nil {
-			// Check if user cancelled in submenu
+			// If error is "cancelled" - it's ESC from submenu, exit completely
 			if actionErr.Error() == "cancelled" {
-				// Loop back to main menu
-				continue
+				return commands.CommandResult{Success: false}
 			}
-			// Other error - show notification and loop back
+			// Other error - show and loop back
 			utils.ShowErrorNotificationWithConfig(&notifCfg, "Video Record Error", actionErr.Error())
 			continue
 		}
@@ -99,10 +107,113 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 	}
 }
 
+func executeDirectCommand(ctx commands.LauncherContext, args []string, cfg *Config, notifCfg *config.NotificationConfig) commands.CommandResult {
+	action := strings.ToLower(args[0])
+
+	var err error
+
+	switch action {
+	case "stop":
+		err = stopRecording(cfg, notifCfg)
+
+	case "start":
+		// If region is provided, start recording directly with that region
+		if len(args) > 1 {
+			region := strings.ToLower(args[1])
+			err = startRecordingDirect(region, cfg, notifCfg)
+		} else {
+			// Otherwise show region selection menu
+			err = startRecording(ctx, cfg, notifCfg)
+		}
+
+	default:
+		return commands.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("unknown videorecord action: %s (use:  start, stop)", action),
+		}
+	}
+
+	if err != nil {
+		return commands.CommandResult{Success: false, Error: err}
+	}
+
+	return commands.CommandResult{Success: true}
+}
+
+func startRecordingDirect(regionArg string, cfg *Config, notifCfg *config.NotificationConfig) error {
+	var region string
+
+	switch regionArg {
+	case "full", "fullscreen":
+		region = "Fullscreen"
+	case "window", "active":
+		region = "Active Window"
+	case "region", "area", "select":
+		region = "Select Region"
+	default:
+		return fmt.Errorf("unknown region: %s (use: full, window, region)", regionArg)
+	}
+
+	saveDir := utils.ExpandHomeDir(cfg.SaveDir)
+	if err := utils.EnsureDir(saveDir); err != nil {
+		return fmt.Errorf("failed to create save directory: %w", err)
+	}
+
+	timestamp := utils.GetTimestamp()
+	filename := fmt.Sprintf("%s_%s.%s", cfg.FilePrefix, timestamp, cfg.Format)
+	outputPath := filepath.Join(saveDir, filename)
+
+	isWayland := os.Getenv("WAYLAND_DISPLAY") != ""
+
+	var cmd *exec.Cmd
+	var err error
+
+	if isWayland {
+		cmd, err = buildWaylandCommand(region, outputPath, cfg, notifCfg)
+		if err != nil {
+			return err
+		}
+	} else {
+		cmd, err = buildX11Command(region, outputPath, cfg)
+		if err != nil {
+			return err
+		}
+	}
+
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+		Pgid:    0,
+	}
+
+	pidFile := "/tmp/ql_videorecord.pid"
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start recording: %w", err)
+	}
+
+	pidData := fmt.Sprintf("%d\n%s", cmd.Process.Pid, outputPath)
+	if err := os.WriteFile(pidFile, []byte(pidData), 0644); err != nil {
+		cmd.Process.Kill()
+		return fmt.Errorf("failed to write PID file: %w", err)
+	}
+
+	if cfg.ShowNotify {
+		utils.NotifyWithConfig(notifCfg, "Video recording started", filename)
+	}
+
+	cmd.Process.Release()
+
+	return nil
+}
+
 func startRecording(ctx commands.LauncherContext, cfg *Config, notifCfg *config.NotificationConfig) error {
 	saveDir := utils.ExpandHomeDir(cfg.SaveDir)
 	if err := utils.EnsureDir(saveDir); err != nil {
-		return fmt.Errorf("failed to create save directory:  %w", err)
+		return fmt.Errorf("failed to create save directory:    %w", err)
 	}
 
 	timestamp := utils.GetTimestamp()
@@ -120,12 +231,12 @@ func startRecording(ctx commands.LauncherContext, cfg *Config, notifCfg *config.
 
 	regionChoice, err := ctx.Show(regionOptions, "Recording Region")
 	if err != nil {
-		// ESC pressed in region selection
+		// ESC pressed - return "cancelled" to exit completely
 		return fmt.Errorf("cancelled")
 	}
 
 	if regionChoice == "← Back" {
-		// Back pressed in region selection
+		// Back pressed - return "cancelled" to loop back
 		return fmt.Errorf("cancelled")
 	}
 
@@ -152,10 +263,10 @@ func startRecording(ctx commands.LauncherContext, cfg *Config, notifCfg *config.
 		Pgid:    0,
 	}
 
-	pidFile := "/tmp/ql_videorecord.pid"
+	pidFile := "/tmp/ql_videorecord. pid"
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start recording: %w", err)
+		return fmt.Errorf("failed to start recording:      %w", err)
 	}
 
 	pidData := fmt.Sprintf("%d\n%s", cmd.Process.Pid, outputPath)
@@ -193,7 +304,6 @@ func buildWaylandCommand(region, outputPath string, cfg *Config, notifCfg *confi
 
 	switch region {
 	case "Fullscreen":
-		// No additional args needed
 
 	case "Active Window":
 		windowGeometry, err := getWaylandActiveWindow()
@@ -241,7 +351,7 @@ func buildX11Command(region, outputPath string, cfg *Config) (*exec.Cmd, error) 
 	case "Active Window":
 		geometry, offset, err := getActiveWindowGeometry()
 		if err != nil {
-			return nil, fmt.Errorf("failed to get active window:  %w", err)
+			return nil, fmt.Errorf("failed to get active window:      %w", err)
 		}
 		args = append(args, "-video_size", geometry)
 		args = append(args, "-i", fmt.Sprintf(":0.0+%s", offset))
@@ -297,7 +407,6 @@ func getWaylandActiveWindow() (string, error) {
 		output, err := cmd.Output()
 		if err == nil {
 			_ = output
-			// TODO: Parse sway tree JSON to get focused window geometry
 		}
 	}
 
@@ -306,7 +415,6 @@ func getWaylandActiveWindow() (string, error) {
 		output, err := cmd.Output()
 		if err == nil {
 			_ = output
-			// TODO: Parse hyprland JSON to get active window geometry
 		}
 	}
 

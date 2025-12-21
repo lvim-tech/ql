@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/lvim-tech/ql/pkg/commands"
+	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/utils"
 	"github.com/mitchellh/mapstructure"
 )
@@ -45,44 +46,76 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 
 	notifCfg := ctx.Config().GetNotificationConfig()
 
-	// Main loop - keeps showing Power menu until Back or successful action
+	args := ctx.Args()
+	if len(args) > 0 {
+		return executeDirectCommand(args[0], &cfg, &notifCfg)
+	}
+
 	for {
 		mainChoice, err := showPowerMainMenu(ctx, &cfg)
 		if err != nil {
-			// ESC pressed at main menu - exit completely
 			return commands.CommandResult{Success: false}
 		}
 
 		if mainChoice == "← Back" {
-			// Back at main level - return to module menu
 			return commands.CommandResult{
 				Success: false,
 				Error:   commands.ErrBack,
 			}
 		}
 
-		// User selected an action - execute it
 		actionResult := executePowerAction(ctx, &cfg, mainChoice)
 
 		if actionResult.Success {
-			// Action succeeded - exit
 			return commands.CommandResult{Success: true}
 		}
 
-		if actionResult.Error != nil {
-			// Action failed - show error and loop back to menu
-			utils.ShowErrorNotificationWithConfig(&notifCfg, "Power Error", actionResult.Error.Error())
-			continue
+		if actionResult.Error != nil && actionResult.Error != commands.ErrBack {
+			return commands.CommandResult{Success: false}
 		}
 
-		// Action cancelled (user said "No") - loop back to menu
+		if actionResult.Error != nil {
+			utils.ShowErrorNotificationWithConfig(&notifCfg, "Power Error", actionResult.Error.Error())
+		}
 		continue
 	}
 }
 
+func executeDirectCommand(action string, cfg *Config, notifCfg *config.NotificationConfig) commands.CommandResult {
+	var err error
+
+	switch strings.ToLower(action) {
+	case "logout":
+		err = executeLogout(cfg)
+	case "suspend":
+		err = executeSuspend(cfg)
+	case "hibernate":
+		err = executeHibernate(cfg)
+	case "reboot":
+		err = executeReboot(cfg)
+	case "shutdown":
+		err = executeShutdown(cfg)
+	default:
+		return commands.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("unknown power action: %s (available: logout, suspend, hibernate, reboot, shutdown)", action),
+		}
+	}
+
+	if err != nil {
+		utils.ShowErrorNotificationWithConfig(notifCfg, "Power Error", err.Error())
+		return commands.CommandResult{Success: false, Error: err}
+	}
+
+	return commands.CommandResult{Success: true}
+}
+
 func showPowerMainMenu(ctx commands.LauncherContext, cfg *Config) (string, error) {
 	var options []string
-	options = append(options, "← Back")
+
+	if !ctx.IsDirectLaunch() {
+		options = append(options, "← Back")
+	}
 
 	if cfg.ShowLogout {
 		options = append(options, "Logout")
@@ -109,12 +142,10 @@ func executePowerAction(ctx commands.LauncherContext, cfg *Config, action string
 		if cfg.ConfirmLogout {
 			confirmed, confirmErr := confirmAction(ctx, "Logout")
 			if confirmErr != nil {
-				// ESC during confirmation - exit completely
-				return commands.CommandResult{Success: false}
+				return commands.CommandResult{Success: false, Error: fmt.Errorf("ESC")}
 			}
 			if !confirmed {
-				// User said "No" - return to Power menu
-				return commands.CommandResult{Success: false}
+				return commands.CommandResult{Success: false, Error: commands.ErrBack}
 			}
 		}
 		if err := executeLogout(cfg); err != nil {
@@ -126,10 +157,10 @@ func executePowerAction(ctx commands.LauncherContext, cfg *Config, action string
 		if cfg.ConfirmSuspend {
 			confirmed, confirmErr := confirmAction(ctx, "Suspend")
 			if confirmErr != nil {
-				return commands.CommandResult{Success: false}
+				return commands.CommandResult{Success: false, Error: fmt.Errorf("ESC")}
 			}
 			if !confirmed {
-				return commands.CommandResult{Success: false}
+				return commands.CommandResult{Success: false, Error: commands.ErrBack}
 			}
 		}
 		if err := executeSuspend(cfg); err != nil {
@@ -141,10 +172,10 @@ func executePowerAction(ctx commands.LauncherContext, cfg *Config, action string
 		if cfg.ConfirmHibernate {
 			confirmed, confirmErr := confirmAction(ctx, "Hibernate")
 			if confirmErr != nil {
-				return commands.CommandResult{Success: false}
+				return commands.CommandResult{Success: false, Error: fmt.Errorf("ESC")}
 			}
 			if !confirmed {
-				return commands.CommandResult{Success: false}
+				return commands.CommandResult{Success: false, Error: commands.ErrBack}
 			}
 		}
 		if err := executeHibernate(cfg); err != nil {
@@ -156,10 +187,10 @@ func executePowerAction(ctx commands.LauncherContext, cfg *Config, action string
 		if cfg.ConfirmReboot {
 			confirmed, confirmErr := confirmAction(ctx, "Reboot")
 			if confirmErr != nil {
-				return commands.CommandResult{Success: false}
+				return commands.CommandResult{Success: false, Error: fmt.Errorf("ESC")}
 			}
 			if !confirmed {
-				return commands.CommandResult{Success: false}
+				return commands.CommandResult{Success: false, Error: commands.ErrBack}
 			}
 		}
 		if err := executeReboot(cfg); err != nil {
@@ -171,10 +202,10 @@ func executePowerAction(ctx commands.LauncherContext, cfg *Config, action string
 		if cfg.ConfirmShutdown {
 			confirmed, confirmErr := confirmAction(ctx, "Shutdown")
 			if confirmErr != nil {
-				return commands.CommandResult{Success: false}
+				return commands.CommandResult{Success: false, Error: fmt.Errorf("ESC")}
 			}
 			if !confirmed {
-				return commands.CommandResult{Success: false}
+				return commands.CommandResult{Success: false, Error: commands.ErrBack}
 			}
 		}
 		if err := executeShutdown(cfg); err != nil {

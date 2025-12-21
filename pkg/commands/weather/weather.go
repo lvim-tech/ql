@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lvim-tech/ql/pkg/commands"
+	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/utils"
 	"github.com/mitchellh/mapstructure"
 )
@@ -53,10 +54,19 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 
 	notifCfg := ctx.Config().GetNotificationConfig()
 
-	// Main loop - keeps showing menu until Back or ESC
+	// Check for direct command
+	args := ctx.Args()
+	if len(args) > 0 {
+		return executeDirectCommand(args, &cfg, &notifCfg)
+	}
+
 	for {
 		var items []string
-		items = append(items, "← Back")
+
+		if !ctx.IsDirectLaunch() {
+			items = append(items, "← Back")
+		}
+
 		items = append(items, cfg.Locations...)
 
 		choice, err := ctx.Show(items, "Weather Location")
@@ -66,14 +76,13 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 
 		if choice == "← Back" {
-			// Back pressed - return to module menu
 			return commands.CommandResult{
 				Success: false,
 				Error:   commands.ErrBack,
 			}
 		}
 
-		notifyID := utils.ShowPersistentNotificationWithConfig(&notifCfg, "Weather", fmt.Sprintf("Fetching weather for %s.. .", choice))
+		notifyID := utils.ShowPersistentNotificationWithConfig(&notifCfg, "Weather", fmt.Sprintf("Fetching weather for %s...", choice))
 
 		weatherData, err := fetchWeather(choice, cfg.Options, cfg.Timeout)
 
@@ -97,6 +106,50 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 	}
 }
 
+func executeDirectCommand(args []string, cfg *Config, notifCfg *config.NotificationConfig) commands.CommandResult {
+	// Join all args as location name (supports "New York" etc.)
+	location := strings.Join(args, " ")
+
+	// Check if location is in configured locations (case-insensitive partial match)
+	var matchedLocation string
+	locationLower := strings.ToLower(location)
+
+	for _, configLoc := range cfg.Locations {
+		configLocLower := strings.ToLower(configLoc)
+		if configLocLower == locationLower || strings.Contains(configLocLower, locationLower) {
+			matchedLocation = configLoc
+			break
+		}
+	}
+
+	// If not found in config, use the provided location directly
+	if matchedLocation == "" {
+		matchedLocation = location
+	}
+
+	notifyID := utils.ShowPersistentNotificationWithConfig(notifCfg, "Weather", fmt.Sprintf("Fetching weather for %s...", matchedLocation))
+
+	weatherData, err := fetchWeather(matchedLocation, cfg.Options, cfg.Timeout)
+
+	utils.ClosePersistentNotificationWithConfig(notifCfg, notifyID)
+
+	if err != nil {
+		return commands.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("failed to fetch weather for %s: %w", matchedLocation, err),
+		}
+	}
+
+	// Display weather data
+	if utils.IsTerminal() {
+		displayWeatherTerminal(weatherData)
+	} else {
+		displayWeatherGUI(weatherData)
+	}
+
+	return commands.CommandResult{Success: true}
+}
+
 func fetchWeather(location string, options string, timeout int) (string, error) {
 	location = strings.ReplaceAll(location, " ", "%20")
 
@@ -107,7 +160,7 @@ func fetchWeather(location string, options string, timeout int) (string, error) 
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create request:  %w", err)
+		return "", fmt.Errorf("failed to create request:     %w", err)
 	}
 
 	req.Header.Set("User-Agent", "curl/7.88.0")
@@ -162,7 +215,7 @@ func displayWeatherGUI(data string) error {
 	}
 
 	if utils.CommandExists("zenity") {
-		tmpFile := "/tmp/ql-weather-data. txt"
+		tmpFile := "/tmp/ql-weather-data.txt"
 		if err := os.WriteFile(tmpFile, []byte(data), 0644); err == nil {
 			defer os.Remove(tmpFile)
 
@@ -179,7 +232,7 @@ func displayWeatherGUI(data string) error {
 
 	terminal := utils.DetectTerminal()
 	if terminal != "" {
-		tmpScript := "/tmp/ql-weather.sh"
+		tmpScript := "/tmp/ql-weather. sh"
 		script := fmt.Sprintf("#!/bin/sh\ncat << 'EOF'\n%s\nEOF\necho ''\necho 'Press Enter to close... '\nread\n", data)
 
 		if err := os.WriteFile(tmpScript, []byte(script), 0755); err == nil {

@@ -9,7 +9,11 @@ import (
 
 	"github.com/lvim-tech/ql/pkg/commands"
 	_ "github.com/lvim-tech/ql/pkg/commands/audiorecord"
+	_ "github.com/lvim-tech/ql/pkg/commands/clipboard"
+	_ "github.com/lvim-tech/ql/pkg/commands/kill"
+	_ "github.com/lvim-tech/ql/pkg/commands/man"
 	_ "github.com/lvim-tech/ql/pkg/commands/mpc"
+	_ "github.com/lvim-tech/ql/pkg/commands/netstat"
 	_ "github.com/lvim-tech/ql/pkg/commands/power"
 	_ "github.com/lvim-tech/ql/pkg/commands/radio"
 	_ "github.com/lvim-tech/ql/pkg/commands/screenshot"
@@ -74,10 +78,18 @@ func run() error {
 
 	if *launcherFlag != "" {
 		launcherName = *launcherFlag
-	} else if len(flag.Args()) > 0 {
-		arg := flag.Args()[0]
-		if arg != "init" && arg != "version" && arg != "help" {
-			launcherName = arg
+	}
+
+	args := flag.Args()
+	if len(args) > 0 {
+		firstArg := args[0]
+
+		if isRegisteredModule(firstArg) {
+			return runDirectModule(cfg, launcherName, firstArg, args[1:])
+		}
+
+		if firstArg != "init" && firstArg != "version" && firstArg != "help" {
+			launcherName = firstArg
 		}
 	}
 
@@ -103,6 +115,52 @@ func run() error {
 	}
 
 	return runFlatMenu(ctx, cfg)
+}
+
+func isRegisteredModule(name string) bool {
+	registeredCommands := commands.GetAll()
+	for _, cmd := range registeredCommands {
+		if cmd.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func runDirectModule(cfg *config.Config, launcherName string, moduleName string, moduleArgs []string) error {
+	registeredCommands := commands.GetAll()
+
+	var targetCmd *commands.Command
+	for _, cmd := range registeredCommands {
+		if cmd.Name == moduleName {
+			targetCmd = &cmd
+			break
+		}
+	}
+
+	if targetCmd == nil {
+		return fmt.Errorf("module '%s' not found", moduleName)
+	}
+
+	if !isCommandEnabled(cfg, targetCmd.Name) {
+		return fmt.Errorf("module '%s' is disabled in config", moduleName)
+	}
+
+	ctx, err := launcher.New(launcherName, cfg)
+	if err != nil {
+		return fmt.Errorf("failed to create launcher: %w", err)
+	}
+
+	ctx.SetDirectLaunch(true)
+	ctx.SetArgs(moduleArgs)
+
+	result := targetCmd.Run(ctx)
+
+	if !result.Success && result.Error != nil && !errors.Is(result.Error, commands.ErrBack) {
+		return result.Error
+	}
+
+	return nil
 }
 
 func runSpecificGroup(ctx launcher.Launcher, cfg *config.Config, groupName string) error {
@@ -188,7 +246,6 @@ func runFlatMenu(ctx launcher.Launcher, cfg *config.Config) error {
 
 		choice, err := ctx.Show(options, "ql")
 		if err != nil {
-			// ESC pressed - exit
 			return nil
 		}
 
@@ -200,7 +257,6 @@ func runFlatMenu(ctx launcher.Launcher, cfg *config.Config) error {
 
 		_ = cmd.Run(ctx)
 
-		// Command finished - exit
 		return nil
 	}
 }
@@ -253,7 +309,6 @@ func runGroupedMenu(ctx launcher.Launcher, cfg *config.Config) error {
 
 		groupChoice, err := ctx.Show(groupOptions, "ql")
 		if err != nil {
-			// ESC at group level - exit
 			return nil
 		}
 
@@ -266,17 +321,13 @@ func runGroupedMenu(ctx launcher.Launcher, cfg *config.Config) error {
 		result := runModuleMenuWithBack(ctx, cfg, selectedGroup, commandMap)
 
 		if result.Success {
-			// Command succeeded - exit
 			return nil
 		}
 
-		// Check error type
 		if errors.Is(result.Error, commands.ErrBack) {
-			// User pressed "← Back" at module level - continue loop (show groups again)
 			continue
 		}
 
-		// Any other case (ESC, error, nil) - exit
 		return nil
 	}
 }
@@ -309,7 +360,6 @@ func runModuleMenuDirect(ctx launcher.Launcher, cfg *config.Config, group config
 
 		moduleChoice, err := ctx.Show(moduleOptions, group.Name)
 		if err != nil {
-			// ESC pressed - exit
 			return commands.CommandResult{Success: false}
 		}
 
@@ -321,7 +371,6 @@ func runModuleMenuDirect(ctx launcher.Launcher, cfg *config.Config, group config
 
 		result := cmd.Run(ctx)
 
-		// Command finished - exit (don't loop back)
 		return result
 	}
 }
@@ -356,12 +405,10 @@ func runModuleMenuWithBack(ctx launcher.Launcher, cfg *config.Config, group conf
 
 		moduleChoice, err := ctx.Show(moduleOptions, group.Name)
 		if err != nil {
-			// ESC pressed - exit completely
 			return commands.CommandResult{Success: false, Error: commands.ErrCancelled}
 		}
 
 		if moduleChoice == "← Back" {
-			// Back button at module level - return to group menu
 			return commands.CommandResult{
 				Success: false,
 				Error:   commands.ErrBack,
@@ -376,17 +423,14 @@ func runModuleMenuWithBack(ctx launcher.Launcher, cfg *config.Config, group conf
 
 		result := cmd.Run(ctx)
 
-		// If command succeeded, exit
 		if result.Success {
 			return result
 		}
 
-		// If command returned ErrBack, loop back to module menu (System)
 		if errors.Is(result.Error, commands.ErrBack) {
 			continue
 		}
 
-		// Any other error (cancelled, etc.) - exit completely
 		return result
 	}
 }
@@ -447,10 +491,10 @@ func printHelp() {
 	fmt.Println("ql - Quick Launcher")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  ql [options]")
+	fmt.Println("  ql [options] [module] [subcommand]")
 	fmt.Println()
 	fmt.Println("Options:")
-	fmt.Println("  --init              Initialize user config (~/.config/ql/config.toml)")
+	fmt.Println("  --init              Initialize user config (~/.config/ql/config. toml)")
 	fmt.Println("  --version           Show version information")
 	fmt.Println("  --help              Show this help message")
 	fmt.Println("  --flat              Use flat menu style")
@@ -461,6 +505,13 @@ func printHelp() {
 	fmt.Println("Available groups:")
 	fmt.Println("  system, network, media, info")
 	fmt.Println()
+	fmt.Println("Direct module access:")
+	fmt.Println("  ql power            Run power module menu")
+	fmt.Println("  ql power logout     Execute logout directly")
+	fmt.Println("  ql power shutdown   Execute shutdown directly")
+	fmt.Println("  ql clipboard        Run clipboard module")
+	fmt.Println("  ql kill             Run kill module")
+	fmt.Println()
 	fmt.Println("Legacy usage (still supported):")
 	fmt.Println("  ql [launcher]       Run ql with specified launcher")
 	fmt.Println("  ql init             Initialize config")
@@ -468,11 +519,12 @@ func printHelp() {
 	fmt.Println("  ql help             Show help")
 	fmt.Println()
 	fmt.Println("Examples:")
+	fmt.Println("  ql power logout")
+	fmt.Println("  ql power shutdown")
+	fmt.Println("  ql --launcher fuzzel power")
 	fmt.Println("  ql --flat --launcher rofi")
 	fmt.Println("  ql --grouped")
-	fmt.Println("  ql --group media")
-	fmt.Println("  ql --group system --launcher fuzzel")
-	fmt.Println("  ql rofi")
+	fmt.Println("  ql --group system")
 	fmt.Println()
 	fmt.Println("Config file: ~/.config/ql/config. toml")
 }

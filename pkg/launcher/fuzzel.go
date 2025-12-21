@@ -10,22 +10,24 @@ import (
 )
 
 type Fuzzel struct {
-	config *config.Config
+	baseLauncher
 }
 
 func NewFuzzel(cfg *config.Config) *Fuzzel {
-	return &Fuzzel{config: cfg}
+	return &Fuzzel{
+		baseLauncher: baseLauncher{cfg: cfg},
+	}
 }
 
 func (f *Fuzzel) Show(options []string, prompt string) (string, error) {
-	launcherCfg := f.config.GetLauncherConfig("fuzzel")
+	launcherCfg := f.cfg.GetLauncherConfig("fuzzel")
 	args := launcherCfg.Args
 
 	cmd := exec.Command("fuzzel", args...)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return "", fmt.Errorf("failed to create stdin pipe: %w", err)
+		return "", fmt.Errorf("failed to create stdin pipe:  %w", err)
 	}
 
 	stdout, err := cmd.StdoutPipe()
@@ -37,13 +39,11 @@ func (f *Fuzzel) Show(options []string, prompt string) (string, error) {
 		return "", fmt.Errorf("failed to start fuzzel: %w", err)
 	}
 
-	// Write options to stdin
 	for _, option := range options {
 		fmt.Fprintln(stdin, option)
 	}
 	stdin.Close()
 
-	// Read selection
 	scanner := bufio.NewScanner(stdout)
 	var choice string
 	if scanner.Scan() {
@@ -59,8 +59,4 @@ func (f *Fuzzel) Show(options []string, prompt string) (string, error) {
 	}
 
 	return choice, nil
-}
-
-func (f *Fuzzel) Config() *config.Config {
-	return f.config
 }
