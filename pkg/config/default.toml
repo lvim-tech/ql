@@ -22,6 +22,7 @@ module_order = [
     "clipboard",
     "screenshot",
     "wifi",
+    "bookman",
     "netstat",
     "radio",
     "mpc",
@@ -142,6 +143,16 @@ format = "qutebrowser_quickmarks"
 name = "Qutebrowser Bookmarks"
 path = "~/.config/qutebrowser/bookmarks/urls"
 format = "qutebrowser_bookmarks"
+
+[[commands.bookman.sources]]
+name = "Brave Bookmarks"
+path = "~/.config/BraveSoftware/Brave-Browser/Default/Bookmarks"
+format = "chrome_bookmarks_json"
+
+[[commands.bookman.sources]]
+name = "Firefox Bookmarks"
+path = "~/.mozilla/firefox/ymhm1k99.default-esr78-1/places.sqlite"
+format = "firefox_sqlite"
 # BOOKMAN
 
 # NETSTAT
@@ -243,7 +254,7 @@ enabled = true
 modules = ["pdf", "doc"]
 # MODULE GROUPS
 
-[commands.radio.radio_stations]
+[commands.radio.stations]
 # Chill / Downtempo
 "SomaFM Groove Salad" = "https://ice1.somafm.com/groovesalad-128-mp3"
 "SomaFM Drone Zone" = "https://ice1.somafm.com/dronezone-128-mp3"
