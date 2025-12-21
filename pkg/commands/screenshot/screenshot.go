@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/lvim-tech/ql/pkg/commands"
+	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/utils"
 	"github.com/mitchellh/mapstructure"
 )
@@ -47,20 +49,30 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 	if err := utils.EnsureDir(saveDir); err != nil {
 		return commands.CommandResult{
 			Success: false,
-			Error:   fmt.Errorf("failed to create save directory:  %w", err),
+			Error:   fmt.Errorf("failed to create save directory: %w", err),
 		}
 	}
 
 	notifCfg := ctx.Config().GetNotificationConfig()
 
-	// Main loop - keeps showing menu until Back or ESC
+	// Check for direct command
+	args := ctx.Args()
+	if len(args) > 0 {
+		return executeDirectCommand(args, &cfg, &notifCfg)
+	}
+
 	for {
-		options := []string{
-			"← Back",
+		var options []string
+
+		if !ctx.IsDirectLaunch() {
+			options = append(options, "← Back")
+		}
+
+		options = append(options,
 			"Fullscreen",
 			"Active Window",
 			"Select Region",
-		}
+		)
 
 		choice, err := ctx.Show(options, "Screenshot")
 		if err != nil {
@@ -69,7 +81,6 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 
 		if choice == "← Back" {
-			// Back pressed - return to module menu
 			return commands.CommandResult{
 				Success: false,
 				Error:   commands.ErrBack,
@@ -106,6 +117,67 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 
 		return commands.CommandResult{Success: true}
 	}
+}
+
+func executeDirectCommand(args []string, cfg *Config, notifCfg *config.NotificationConfig) commands.CommandResult {
+	mode := strings.ToLower(args[0])
+
+	var screenshotMode string
+
+	switch mode {
+	case "full", "fullscreen":
+		screenshotMode = "Fullscreen"
+
+	case "window", "active":
+		screenshotMode = "Active Window"
+
+	case "region", "area", "select":
+		screenshotMode = "Select Region"
+
+	default:
+		return commands.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("unknown screenshot mode: %s (use:  full, window, region)", mode),
+		}
+	}
+
+	saveDir := utils.ExpandHomeDir(cfg.SaveDir)
+	if err := utils.EnsureDir(saveDir); err != nil {
+		return commands.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("failed to create save directory:  %w", err),
+		}
+	}
+
+	timestamp := utils.GetTimestamp()
+	filename := fmt.Sprintf("%s_%s.png", cfg.FilePrefix, timestamp)
+	outputPath := filepath.Join(saveDir, filename)
+
+	server := utils.DetectDisplayServer()
+
+	var cmd *exec.Cmd
+	var err error
+
+	if server.IsWayland() {
+		cmd, err = buildWaylandCommand(screenshotMode, outputPath)
+	} else {
+		cmd, err = buildX11Command(screenshotMode, outputPath)
+	}
+
+	if err != nil {
+		return commands.CommandResult{Success: false, Error: err}
+	}
+
+	if err := cmd.Run(); err != nil {
+		return commands.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("screenshot failed: %w", err),
+		}
+	}
+
+	utils.NotifyWithConfig(notifCfg, "Screenshot saved", filename)
+
+	return commands.CommandResult{Success: true}
 }
 
 func buildWaylandCommand(mode, outputPath string) (*exec.Cmd, error) {

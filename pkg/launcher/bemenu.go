@@ -10,15 +10,17 @@ import (
 )
 
 type Bemenu struct {
-	config *config.Config
+	baseLauncher
 }
 
 func NewBemenu(cfg *config.Config) *Bemenu {
-	return &Bemenu{config: cfg}
+	return &Bemenu{
+		baseLauncher: baseLauncher{cfg: cfg},
+	}
 }
 
 func (b *Bemenu) Show(options []string, prompt string) (string, error) {
-	launcherCfg := b.config.GetLauncherConfig("bemenu")
+	launcherCfg := b.cfg.GetLauncherConfig("bemenu")
 	args := append(launcherCfg.Args, "-p", prompt)
 
 	cmd := exec.Command("bemenu", args...)
@@ -30,7 +32,7 @@ func (b *Bemenu) Show(options []string, prompt string) (string, error) {
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", fmt.Errorf("failed to create stdout pipe:  %w", err)
+		return "", fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -51,7 +53,7 @@ func (b *Bemenu) Show(options []string, prompt string) (string, error) {
 	}
 
 	if err := cmd.Wait(); err != nil {
-		return "", fmt.Errorf("bemenu exited with error: %w", err)
+		return "", fmt.Errorf("bemenu exited with error:  %w", err)
 	}
 
 	if choice == "" {
@@ -61,6 +63,4 @@ func (b *Bemenu) Show(options []string, prompt string) (string, error) {
 	return choice, nil
 }
 
-func (b *Bemenu) Config() *config.Config {
-	return b.config
-}
+// Config() вече идва от baseLauncher - премахни го

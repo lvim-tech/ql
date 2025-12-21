@@ -1,12 +1,25 @@
 # ql configuration file
 
+# DEFAULTS
 default_launcher = "auto"
 menu_style = "grouped"
 
-# Module execution order (flat menu)
+pdf_viewer = "zathura"
+browser = "qutebrowser"
+editor = "nvim"
+man_viewer = "nvimpager"
+# DEFAULTS
+
+# MODULE GROUPS DISPLAY ORDER (grouped menu)
+module_groups_order = ["system", "network", "media", "info"]
+# MODULE GROUPS DISPLAY ORDER (grouped menu)
+
+# MODULE EXECUTION ORDER (flat menu)
 module_order = [
     "power",
+    "clipboard",
     "screenshot",
+    "calendar",
     "wifi",
     "radio",
     "mpc",
@@ -14,21 +27,20 @@ module_order = [
     "videorecord",
     "weather",
 ]
+# MODULE EXECUTION ORDER (flat menu)
 
-# Module groups display order (grouped menu)
-module_groups_order = ["system", "network", "media", "info"]
-
-# Notification settings
+# NOTIFICATION
 [notifications]
 enabled = true
 tool = "auto"
 timeout = 5000
 urgency = "normal"
 show_in_terminal = false
+# NOTIFICATION
 
-# Launcher-specific arguments
+# LAUNCERS
 [launchers.rofi]
-args = ["-dmenu", "-i", "-p"]
+args = ["-dmenu", "-i"]
 
 [launchers.dmenu]
 args = ["-i", "-p"]
@@ -41,29 +53,16 @@ args = ["-i", "-p"]
 
 [launchers.fuzzel]
 args = ["--dmenu", "--prompt"]
+# LAUNCERS
 
-# Module groups (grouped menu)
+###                                                     MODULE GROUP SYSTEM
+
 [module_groups.system]
 name = "System"
 enabled = true
-modules = ["power", "screenshot"]
+modules = ["power", "usb", "kill", "clipboard", "screenshot"]
 
-[module_groups.network]
-name = "Network"
-enabled = true
-modules = ["wifi"]
-
-[module_groups.media]
-name = "Media"
-enabled = true
-modules = ["radio", "mpc", "audiorecord", "videorecord"]
-
-[module_groups.info]
-name = "Info"
-enabled = true
-modules = ["weather"]
-
-# Power management configuration
+# POWER
 [commands.power]
 enabled = true
 show_logout = true
@@ -81,25 +80,150 @@ suspend_command = "systemctl suspend"
 hibernate_command = "systemctl hibernate"
 reboot_command = "systemctl reboot"
 shutdown_command = "systemctl poweroff"
+# POWER
 
-# Screenshot configuration
+# USB
+[commands.usb]
+# USB
+
+# KILL
+[commands.kill]
+enabled = true
+show_user_processes = true
+show_all_processes = false
+exclude_processes = ["systemd", "init", "kthreadd"]
+confirm_kill = true
+# KILL
+
+# CLIPBOARD
+[commands.clipboard]
+enabled = true
+max_items = 50
+# CLIPBOARD
+
+# SCREENSHOT
 [commands.screenshot]
 enabled = true
 save_dir = "~/Pictures/Screenshots"
 file_prefix = "screenshot"
+# SCREENSHOT
 
-# WiFi configuration
+###                                                     MODULE GROUP SYSTEM
+
+###                                                     MODULE GROUP NETWORK
+
+[module_groups.network]
+name = "Network"
+enabled = true
+modules = ["wifi", "netstat"]
+
+# WIFI
 [commands.wifi]
 enabled = true
 show_notify = true
 test_host = "1.1.1.1"
 test_count = 3
 test_wait = 2
+# WIFI
 
-# Radio configuration
+# NETSTAT
+[commands.netstat]
+enabled = true
+show_notify = true
+update_interval = 1
+prefer_vnstat = true
+# NETSTAT
+
+###                                                     MODULE GROUP NETWORK
+
+###                                                     MODULE GROUP MEDIA
+
+[module_groups.media]
+name = "Media"
+enabled = true
+modules = ["radio", "mpc", "audiorecord", "videorecord"]
+
+# RADIO
 [commands.radio]
 enabled = true
 volume = 70
+# RADIO
+
+# MPC
+[commands.mpc]
+enabled = true
+connection_type = "socket"
+socket = "~/.local/state/mpd/socket"
+host = "localhost"
+port = "6600"
+password = ""
+current_playlist_cache = "~/.cache/ql/current_playlist"
+# MPC
+
+# AUDIO
+[commands.audiorecord]
+enabled = true
+save_dir = "~/Music/Recordings"
+file_prefix = "recording"
+format = "mp3"
+quality = "2"
+# AUDIO
+
+# VIDEO
+[commands.videorecord]
+enabled = true
+save_dir = "~/Videos/Recordings"
+file_prefix = "screencast"
+format = "mp4"
+quality = "23"
+record_audio = true
+show_notify = true
+
+[commands.videorecord.wayland]
+video_codec = "libx264"
+audio_codec = "aac"
+preset = "fast"
+framerate = 30
+
+[commands.videorecord.x11]
+video_codec = "libx264"
+audio_codec = "aac"
+preset = "fast"
+framerate = 30
+output_fps = 30
+# VIDEO
+
+###                                                     MODULE GROUP MEDIA
+
+###                                                     MODULE GROUP INFO
+#
+[module_groups.info]
+name = "Info"
+enabled = true
+modules = ["weather", "man"]
+
+# WEATHER
+[commands.weather]
+enabled = true
+locations = ["Sofia", "London", "New York"]
+options = ""
+timeout = 30
+# WEATHER
+
+# MAN
+[commands.man]
+enabled = true
+show_descriptions = true
+max_results = 100
+# MAN
+
+###                                                     MODULE GROUP INFO
+
+[module_groups.files]
+name = "Info"
+enabled = true
+modules = ["pdf", "doc"]
+# MODULE GROUPS
 
 [commands.radio.radio_stations]
 # Chill / Downtempo
@@ -178,51 +302,3 @@ volume = 70
 "Radio Caprice Synthwave" = "https://radio.caprice.fm/synthwave.mp3"
 "DataWave FM" = "https://datawave.fm/mp3"
 "Retrowave One" = "https://retrowave.one/live"
-
-# MPC configuration
-[commands.mpc]
-enabled = true
-connection_type = "socket"
-socket = "~/.local/state/mpd/socket"
-host = "localhost"
-port = "6600"
-password = ""
-current_playlist_cache = "~/.cache/ql/current_playlist"
-
-# Audio recording configuration
-[commands.audiorecord]
-enabled = true
-save_dir = "~/Music/Recordings"
-file_prefix = "recording"
-format = "mp3"
-quality = "2"
-
-# Video recording configuration
-[commands.videorecord]
-enabled = true
-save_dir = "~/Videos/Recordings"
-file_prefix = "screencast"
-format = "mp4"
-quality = "23"
-record_audio = true
-show_notify = true
-
-[commands.videorecord.wayland]
-video_codec = "libx264"
-audio_codec = "aac"
-preset = "fast"
-framerate = 30
-
-[commands.videorecord.x11]
-video_codec = "libx264"
-audio_codec = "aac"
-preset = "fast"
-framerate = 30
-output_fps = 30
-
-# Weather configuration
-[commands.weather]
-enabled = true
-locations = ["Sofia", "London", "New York"]
-options = ""
-timeout = 30

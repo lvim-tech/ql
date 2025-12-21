@@ -25,7 +25,6 @@ func init() {
 	})
 }
 
-// runMpcCommand executes mpc command with proper environment
 func runMpcCommand(args ...string) *exec.Cmd {
 	cmd := exec.Command(mpcPath, args...)
 	cmd.Env = os.Environ()
@@ -66,7 +65,6 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 
 	notifCfg := ctx.Config().GetNotificationConfig()
 
-	// Try to setup MPD connection
 	if err := setupMpdConnection(&cfg); err != nil {
 		utils.ShowErrorNotificationWithConfig(&notifCfg, "MPC Setup Error",
 			fmt.Sprintf("MPD setup failed: %v", err))
@@ -76,7 +74,6 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 	}
 
-	// Test connection
 	testCmd := runMpcCommand("status")
 	output, err := testCmd.CombinedOutput()
 	if err != nil {
@@ -85,7 +82,7 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 			errMsg = err.Error()
 		}
 		utils.ShowErrorNotificationWithConfig(&notifCfg, "MPC Connection Error",
-			fmt.Sprintf("MPD connection failed: %s\n\nConnection: %s\nMPD_HOST: %s",
+			fmt.Sprintf("MPD connection failed: %s\n\nConnection:     %s\nMPD_HOST: %s",
 				errMsg,
 				cfg.ConnectionType,
 				os.Getenv("MPD_HOST")))
@@ -95,10 +92,20 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 	}
 
-	// Main loop - keeps showing menu until Back, ESC, or successful action
+	// Check for direct command
+	args := ctx.Args()
+	if len(args) > 0 {
+		return executeDirectCommand(ctx, args, &cfg, &notifCfg)
+	}
+
 	for {
-		options := []string{
-			"← Back",
+		var options []string
+
+		if !ctx.IsDirectLaunch() {
+			options = append(options, "← Back")
+		}
+
+		options = append(options,
 			"Play/Pause",
 			"Next",
 			"Previous",
@@ -106,16 +113,15 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 			"Select Playlist",
 			"Select Song",
 			"Show Current",
-		}
+		)
 
 		choice, err := ctx.Show(options, "MPC")
 		if err != nil {
-			// ESC pressed - exit completely
+			// ESC pressed at main menu - exit completely
 			return commands.CommandResult{Success: false}
 		}
 
 		if choice == "← Back" {
-			// Back pressed - return to module menu
 			return commands.CommandResult{
 				Success: false,
 				Error:   commands.ErrBack,
@@ -144,12 +150,11 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 
 		if actionErr != nil {
-			// Check if user cancelled in submenu
+			// If error is "cancelled" - it's ESC from submenu, exit completely
 			if actionErr.Error() == "cancelled" {
-				// Loop back to main menu
-				continue
+				return commands.CommandResult{Success: false}
 			}
-			// Other error - show notification and loop back
+			// Other error - show and loop back
 			utils.ShowErrorNotificationWithConfig(&notifCfg, "MPC Error", actionErr.Error())
 			continue
 		}
@@ -157,6 +162,79 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		// Action succeeded - exit
 		return commands.CommandResult{Success: true}
 	}
+}
+
+func executeDirectCommand(ctx commands.LauncherContext, args []string, cfg *Config, notifCfg *config.NotificationConfig) commands.CommandResult {
+	action := strings.ToLower(args[0])
+
+	var err error
+
+	switch action {
+	case "toggle", "play", "pause":
+		err = togglePlayPause(notifCfg)
+
+	case "next":
+		err = next(notifCfg)
+
+	case "prev", "previous":
+		err = previous(notifCfg)
+
+	case "stop":
+		err = stop(notifCfg)
+
+	case "current", "status":
+		err = showCurrent(notifCfg)
+
+	case "playlist":
+		// If playlist name is provided, load it directly
+		if len(args) > 1 {
+			playlistName := strings.Join(args[1:], " ")
+			err = loadPlaylistDirect(playlistName, cfg, notifCfg)
+		} else {
+			// Otherwise show playlist selection menu
+			err = selectPlaylist(ctx, cfg, notifCfg)
+		}
+
+	case "song":
+		err = selectSong(ctx, notifCfg)
+
+	default:
+		return commands.CommandResult{
+			Success: false,
+			Error:   fmt.Errorf("unknown mpc action: %s (use:  toggle, next, prev, stop, current, playlist, song)", action),
+		}
+	}
+
+	if err != nil {
+		return commands.CommandResult{Success: false, Error: err}
+	}
+
+	return commands.CommandResult{Success: true}
+}
+
+func loadPlaylistDirect(playlistName string, cfg *Config, notifCfg *config.NotificationConfig) error {
+	// Clear current playlist
+	cmd := runMpcCommand("clear")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to clear playlist: %w", err)
+	}
+
+	// Load the playlist
+	cmd = runMpcCommand("load", playlistName)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to load playlist '%s': %w", playlistName, err)
+	}
+
+	// Start playing
+	cmd = runMpcCommand("play")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to play: %w", err)
+	}
+
+	cachePlaylist(cfg, playlistName)
+	utils.NotifyWithConfig(notifCfg, "MPC - Playlist Loaded", playlistName)
+
+	return nil
 }
 
 func setupMpdConnection(cfg *Config) error {
@@ -275,7 +353,7 @@ func selectPlaylist(ctx commands.LauncherContext, cfg *Config, notifCfg *config.
 	cmd := runMpcCommand("lsplaylists")
 	output, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to get playlists:  %w", err)
+		return fmt.Errorf("failed to get playlists: %w", err)
 	}
 
 	lines := strings.Split(string(output), "\n")
@@ -288,41 +366,23 @@ func selectPlaylist(ctx commands.LauncherContext, cfg *Config, notifCfg *config.
 	}
 
 	if len(playlists) == 0 {
-		return fmt.Errorf("no saved playlists found.  Use 'mpc save <name>' to create one")
+		return fmt.Errorf("no saved playlists found.    Use 'mpc save <name>' to create one")
 	}
 
 	playlists = append([]string{"← Back"}, playlists...)
 
 	choice, err := ctx.Show(playlists, "Select Playlist")
 	if err != nil {
-		// ESC pressed in playlist selection
+		// ESC pressed - return "cancelled" to exit completely
 		return fmt.Errorf("cancelled")
 	}
 
 	if choice == "← Back" {
-		// Back pressed in playlist selection
+		// Back pressed - return "cancelled" to loop back
 		return fmt.Errorf("cancelled")
 	}
 
-	cmd = runMpcCommand("clear")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to clear playlist: %w", err)
-	}
-
-	cmd = runMpcCommand("load", choice)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to load playlist: %w", err)
-	}
-
-	cmd = runMpcCommand("play")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to play: %w", err)
-	}
-
-	cachePlaylist(cfg, choice)
-	utils.NotifyWithConfig(notifCfg, "MPC - Playlist Loaded", choice)
-
-	return nil
+	return loadPlaylistDirect(choice, cfg, notifCfg)
 }
 
 func selectSong(ctx commands.LauncherContext, notifCfg *config.NotificationConfig) error {
@@ -349,12 +409,12 @@ func selectSong(ctx commands.LauncherContext, notifCfg *config.NotificationConfi
 
 	choice, err := ctx.Show(songs, "Select Song")
 	if err != nil {
-		// ESC pressed in song selection
+		// ESC pressed - return "cancelled" to exit completely
 		return fmt.Errorf("cancelled")
 	}
 
 	if choice == "← Back" {
-		// Back pressed in song selection
+		// Back pressed - return "cancelled" to loop back
 		return fmt.Errorf("cancelled")
 	}
 
@@ -381,7 +441,7 @@ func showCurrent(notifCfg *config.NotificationConfig) error {
 	cmd := runMpcCommand("current", "-f", "%artist% - %title%")
 	output, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to get current song: %w", err)
+		return fmt.Errorf("failed to get current song:    %w", err)
 	}
 
 	current := strings.TrimSpace(string(output))

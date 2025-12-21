@@ -19,6 +19,10 @@ var defaultConfig string
 type Config struct {
 	DefaultLauncher   string                    `toml:"default_launcher"`
 	MenuStyle         string                    `toml:"menu_style"`
+	PdfViewer         string                    `toml:"pdf_viewer"`
+	Browser           string                    `toml:"browser"`
+	Editor            string                    `toml:"editor"`
+	ManViewer         string                    `toml:"man_viewer"`
 	ModuleOrder       []string                  `toml:"module_order"`
 	ModuleGroupsOrder []string                  `toml:"module_groups_order"`
 	ModuleGroups      map[string]ModuleGroup    `toml:"module_groups"`
@@ -52,7 +56,7 @@ type NotificationConfig struct {
 func Load() (*Config, error) {
 	var defaultCfg Config
 	if err := toml.Unmarshal([]byte(defaultConfig), &defaultCfg); err != nil {
-		return nil, fmt.Errorf("failed to decode default config:  %w", err)
+		return nil, fmt.Errorf("failed to decode default config: %w", err)
 	}
 
 	userConfigPath := GetUserConfigPath()
@@ -67,68 +71,6 @@ func Load() (*Config, error) {
 
 	mergedCfg := mergeConfigs(defaultCfg, userCfg)
 	return &mergedCfg, nil
-}
-
-// mergeConfigs deep merges user config into default config
-func mergeConfigs(defaultCfg, userCfg Config) Config {
-	result := defaultCfg
-
-	if userCfg.DefaultLauncher != "" {
-		result.DefaultLauncher = userCfg.DefaultLauncher
-	}
-
-	if userCfg.MenuStyle != "" {
-		result.MenuStyle = userCfg.MenuStyle
-	}
-
-	if len(userCfg.ModuleOrder) > 0 {
-		result.ModuleOrder = userCfg.ModuleOrder
-	}
-
-	if len(userCfg.ModuleGroupsOrder) > 0 {
-		result.ModuleGroupsOrder = userCfg.ModuleGroupsOrder
-	}
-
-	if result.ModuleGroups == nil {
-		result.ModuleGroups = make(map[string]ModuleGroup)
-	}
-	maps.Copy(result.ModuleGroups, userCfg.ModuleGroups)
-
-	if result.Launchers == nil {
-		result.Launchers = make(map[string]LauncherConfig)
-	}
-	maps.Copy(result.Launchers, userCfg.Launchers)
-
-	if userCfg.Notifications.Tool != "" {
-		result.Notifications.Tool = userCfg.Notifications.Tool
-	}
-	if userCfg.Notifications.Timeout != 0 {
-		result.Notifications.Timeout = userCfg.Notifications.Timeout
-	}
-	if userCfg.Notifications.Urgency != "" {
-		result.Notifications.Urgency = userCfg.Notifications.Urgency
-	}
-	result.Notifications.Enabled = userCfg.Notifications.Enabled || result.Notifications.Enabled
-	result.Notifications.ShowInTerminal = userCfg.Notifications.ShowInTerminal
-
-	if result.Commands == nil {
-		result.Commands = make(map[string]map[string]any)
-	}
-
-	for cmdName, userCmdConfig := range userCfg.Commands {
-		if result.Commands[cmdName] == nil {
-			result.Commands[cmdName] = make(map[string]any)
-		}
-		maps.Copy(result.Commands[cmdName], userCmdConfig)
-	}
-
-	return result
-}
-
-// GetUserConfigPath returns the path to user config
-func GetUserConfigPath() string {
-	home := os.Getenv("HOME")
-	return filepath.Join(home, ".config", "ql", "config.toml")
 }
 
 // InitUserConfig creates user config from default
@@ -147,12 +89,90 @@ func InitUserConfig() error {
 	return nil
 }
 
-// GetDefaultLauncher returns the default launcher name
+// GetUserConfigPath returns the path to user config
+func GetUserConfigPath() string {
+	home := os.Getenv("HOME")
+	return filepath.Join(home, ".config", "ql", "config.toml")
+}
+
+// mergeConfigs deep merges user config into default config
+func mergeConfigs(defaultCfg, userCfg Config) Config {
+	result := defaultCfg
+
+	// Merge simple string fields
+	if userCfg.DefaultLauncher != "" {
+		result.DefaultLauncher = userCfg.DefaultLauncher
+	}
+	if userCfg.MenuStyle != "" {
+		result.MenuStyle = userCfg.MenuStyle
+	}
+	if userCfg.PdfViewer != "" {
+		result.PdfViewer = userCfg.PdfViewer
+	}
+	if userCfg.Browser != "" {
+		result.Browser = userCfg.Browser
+	}
+	if userCfg.Editor != "" {
+		result.Editor = userCfg.Editor
+	}
+	if userCfg.ManViewer != "" {
+		result.ManViewer = userCfg.ManViewer
+	}
+
+	// Merge arrays
+	if len(userCfg.ModuleOrder) > 0 {
+		result.ModuleOrder = userCfg.ModuleOrder
+	}
+	if len(userCfg.ModuleGroupsOrder) > 0 {
+		result.ModuleGroupsOrder = userCfg.ModuleGroupsOrder
+	}
+
+	// Merge maps
+	if result.ModuleGroups == nil {
+		result.ModuleGroups = make(map[string]ModuleGroup)
+	}
+	maps.Copy(result.ModuleGroups, userCfg.ModuleGroups)
+
+	if result.Launchers == nil {
+		result.Launchers = make(map[string]LauncherConfig)
+	}
+	maps.Copy(result.Launchers, userCfg.Launchers)
+
+	// Merge notification config
+	if userCfg.Notifications.Tool != "" {
+		result.Notifications.Tool = userCfg.Notifications.Tool
+	}
+	if userCfg.Notifications.Timeout != 0 {
+		result.Notifications.Timeout = userCfg.Notifications.Timeout
+	}
+	if userCfg.Notifications.Urgency != "" {
+		result.Notifications.Urgency = userCfg.Notifications.Urgency
+	}
+	result.Notifications.Enabled = userCfg.Notifications.Enabled || result.Notifications.Enabled
+	result.Notifications.ShowInTerminal = userCfg.Notifications.ShowInTerminal
+
+	// Merge commands
+	if result.Commands == nil {
+		result.Commands = make(map[string]map[string]any)
+	}
+	for cmdName, userCmdConfig := range userCfg.Commands {
+		if result.Commands[cmdName] == nil {
+			result.Commands[cmdName] = make(map[string]any)
+		}
+		maps.Copy(result.Commands[cmdName], userCmdConfig)
+	}
+
+	return result
+}
+
+// ============================================================================
+// GLOBAL GETTERS
+// ============================================================================
+
 func (c *Config) GetDefaultLauncher() string {
 	return c.DefaultLauncher
 }
 
-// GetMenuStyle returns the menu style (flat or grouped)
 func (c *Config) GetMenuStyle() string {
 	if c.MenuStyle == "" {
 		return "flat"
@@ -160,40 +180,64 @@ func (c *Config) GetMenuStyle() string {
 	return c.MenuStyle
 }
 
-// GetModuleOrder returns the module execution order
+func (c *Config) GetPdfViewer() string {
+	if c.PdfViewer == "" {
+		return "zathura"
+	}
+	return c.PdfViewer
+}
+
+func (c *Config) GetBrowser() string {
+	if c.Browser == "" {
+		return "firefox"
+	}
+	return c.Browser
+}
+
+func (c *Config) GetEditor() string {
+	if c.Editor == "" {
+		return "vim"
+	}
+	return c.Editor
+}
+
+func (c *Config) GetManViewer() string {
+	if c.ManViewer == "" {
+		return "less"
+	}
+	return c.ManViewer
+}
+
+// ============================================================================
+// MODULE ORDER & GROUPS
+// ============================================================================
+
 func (c *Config) GetModuleOrder() []string {
 	return c.ModuleOrder
 }
 
-// GetModuleGroupsOrder returns the order of module groups
 func (c *Config) GetModuleGroupsOrder() []string {
 	if len(c.ModuleGroupsOrder) > 0 {
 		return c.ModuleGroupsOrder
 	}
-
-	return []string{
-		"system",
-		"network",
-		"media",
-		"info",
-	}
+	return []string{"system", "network", "media", "info"}
 }
 
-// GetModuleGroups returns enabled module groups
 func (c *Config) GetModuleGroups() map[string]ModuleGroup {
 	result := make(map[string]ModuleGroup)
-
 	for key, group := range c.ModuleGroups {
 		if !group.Enabled {
 			continue
 		}
 		result[key] = group
 	}
-
 	return result
 }
 
-// GetLauncherConfig returns the launcher configuration
+// ============================================================================
+// LAUNCHER & NOTIFICATIONS
+// ============================================================================
+
 func (c *Config) GetLauncherConfig(name string) LauncherConfig {
 	if cfg, ok := c.Launchers[name]; ok {
 		return cfg
@@ -201,47 +245,58 @@ func (c *Config) GetLauncherConfig(name string) LauncherConfig {
 	return LauncherConfig{}
 }
 
-// GetNotificationConfig returns the notification configuration
 func (c *Config) GetNotificationConfig() NotificationConfig {
 	return c.Notifications
 }
 
-// GetPowerConfig returns the power module configuration
-func (c *Config) GetPowerConfig() any {
-	return c.Commands["power"]
-}
+// ============================================================================
+// MODULE CONFIGS (alphabetically sorted)
+// ============================================================================
 
-// GetScreenshotConfig returns the screenshot module configuration
-func (c *Config) GetScreenshotConfig() any {
-	return c.Commands["screenshot"]
-}
-
-// GetRadioConfig returns the radio module configuration
-func (c *Config) GetRadioConfig() any {
-	return c.Commands["radio"]
-}
-
-// GetWifiConfig returns the wifi module configuration
-func (c *Config) GetWifiConfig() any {
-	return c.Commands["wifi"]
-}
-
-// GetMpcConfig returns the mpc module configuration
-func (c *Config) GetMpcConfig() any {
-	return c.Commands["mpc"]
-}
-
-// GetAudioRecordConfig returns the audiorecord module configuration
 func (c *Config) GetAudioRecordConfig() any {
 	return c.Commands["audiorecord"]
 }
 
-// GetVideoRecordConfig returns the videorecord module configuration
+func (c *Config) GetClipboardConfig() any {
+	return c.Commands["clipboard"]
+}
+
+func (c *Config) GetKillConfig() any {
+	return c.Commands["kill"]
+}
+
+func (c *Config) GetManConfig() any {
+	return c.Commands["man"]
+}
+
+func (c *Config) GetMpcConfig() any {
+	return c.Commands["mpc"]
+}
+
+func (c *Config) GetPowerConfig() any {
+	return c.Commands["power"]
+}
+
+func (c *Config) GetRadioConfig() any {
+	return c.Commands["radio"]
+}
+
+func (c *Config) GetScreenshotConfig() any {
+	return c.Commands["screenshot"]
+}
+
 func (c *Config) GetVideoRecordConfig() any {
 	return c.Commands["videorecord"]
 }
 
-// GetWeatherConfig returns the weather module configuration
 func (c *Config) GetWeatherConfig() any {
 	return c.Commands["weather"]
+}
+
+func (c *Config) GetWifiConfig() any {
+	return c.Commands["wifi"]
+}
+
+func (c *Config) GetNetstatConfig() any {
+	return c.Commands["netstat"]
 }

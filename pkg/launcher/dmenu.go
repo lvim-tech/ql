@@ -10,15 +10,17 @@ import (
 )
 
 type Dmenu struct {
-	config *config.Config
+	baseLauncher
 }
 
 func NewDmenu(cfg *config.Config) *Dmenu {
-	return &Dmenu{config: cfg}
+	return &Dmenu{
+		baseLauncher: baseLauncher{cfg: cfg},
+	}
 }
 
 func (d *Dmenu) Show(options []string, prompt string) (string, error) {
-	launcherCfg := d.config.GetLauncherConfig("dmenu")
+	launcherCfg := d.cfg.GetLauncherConfig("dmenu")
 	args := append(launcherCfg.Args, "-p", prompt)
 
 	cmd := exec.Command("dmenu", args...)
@@ -37,13 +39,11 @@ func (d *Dmenu) Show(options []string, prompt string) (string, error) {
 		return "", fmt.Errorf("failed to start dmenu: %w", err)
 	}
 
-	// Write options to stdin
 	for _, option := range options {
 		fmt.Fprintln(stdin, option)
 	}
 	stdin.Close()
 
-	// Read selection
 	scanner := bufio.NewScanner(stdout)
 	var choice string
 	if scanner.Scan() {
@@ -59,8 +59,4 @@ func (d *Dmenu) Show(options []string, prompt string) (string, error) {
 	}
 
 	return choice, nil
-}
-
-func (d *Dmenu) Config() *config.Config {
-	return d.config
 }

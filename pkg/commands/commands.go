@@ -21,17 +21,19 @@ type CommandResult struct {
 	Error   error
 }
 
-// Command представлява команда
+// Command represents a command
 type Command struct {
 	Name        string
 	Description string
 	Run         func(LauncherContext) CommandResult
 }
 
-// LauncherContext interface за launcher
+// LauncherContext interface for launcher
 type LauncherContext interface {
 	Show(options []string, prompt string) (string, error)
 	Config() *config.Config
+	IsDirectLaunch() bool
+	Args() []string
 }
 
 var registry []Command
