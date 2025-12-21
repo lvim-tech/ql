@@ -379,7 +379,7 @@ func selectPlaylist(ctx commands.LauncherContext, cfg *Config, notifCfg *config.
 
 	if choice == "← Back" {
 		// Back pressed - return "cancelled" to loop back
-		return fmt.Errorf("cancelled")
+		return fmt.Errorf("back")
 	}
 
 	return loadPlaylistDirect(choice, cfg, notifCfg)
@@ -415,7 +415,7 @@ func selectSong(ctx commands.LauncherContext, notifCfg *config.NotificationConfi
 
 	if choice == "← Back" {
 		// Back pressed - return "cancelled" to loop back
-		return fmt.Errorf("cancelled")
+		return fmt.Errorf("back")
 	}
 
 	var position int

@@ -291,14 +291,13 @@ func formatTrafficOutput(stats *NetworkStats) string {
 	fmt.Fprintf(&output, "Network Statistics - %s\n\n", stats.Period)
 
 	for _, iface := range stats.Interfaces {
-		icon := getInterfaceIcon(iface.Type)
 		statusStr := iface.Status
 
 		if iface.Type == "wifi" && iface.SSID != "" {
 			statusStr = fmt.Sprintf("Connected to %s", iface.SSID)
 		}
 
-		fmt.Fprintf(&output, "┌─ %s %s (%s - %s)\n", icon, iface.Name, iface.Type, statusStr)
+		fmt.Fprintf(&output, "┌─ %s (%s - %s)\n", iface.Name, iface.Type, statusStr)
 
 		if iface.IP != "" {
 			fmt.Fprintf(&output, "│  IP: %s\n", iface.IP)
@@ -328,21 +327,6 @@ func formatTrafficOutput(stats *NetworkStats) string {
 	}
 
 	return output.String()
-}
-
-func getInterfaceIcon(ifaceType string) string {
-	switch ifaceType {
-	case "wifi":
-		return "📶"
-	case "ethernet":
-		return "🔌"
-	case "vpn":
-		return "🔐"
-	case "loopback":
-		return "🔄"
-	default:
-		return "🌐"
-	}
 }
 
 type Connection struct {

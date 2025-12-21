@@ -140,12 +140,20 @@ func executePowerAction(ctx commands.LauncherContext, cfg *Config, action string
 	switch action {
 	case "Logout":
 		if cfg.ConfirmLogout {
-			confirmed, confirmErr := confirmAction(ctx, "Logout")
-			if confirmErr != nil {
+			choice, err := confirmAction(ctx, "Logout")
+			if err != nil {
 				return commands.CommandResult{Success: false, Error: fmt.Errorf("ESC")}
 			}
-			if !confirmed {
+			switch choice {
+			case "← Back":
 				return commands.CommandResult{Success: false, Error: commands.ErrBack}
+			case "Yes":
+				if err := executeLogout(cfg); err != nil {
+					return commands.CommandResult{Success: false, Error: err}
+				}
+				return commands.CommandResult{Success: true}
+			case "No":
+				return commands.CommandResult{Success: true}
 			}
 		}
 		if err := executeLogout(cfg); err != nil {
@@ -155,12 +163,20 @@ func executePowerAction(ctx commands.LauncherContext, cfg *Config, action string
 
 	case "Suspend":
 		if cfg.ConfirmSuspend {
-			confirmed, confirmErr := confirmAction(ctx, "Suspend")
-			if confirmErr != nil {
+			choice, err := confirmAction(ctx, "Suspend")
+			if err != nil {
 				return commands.CommandResult{Success: false, Error: fmt.Errorf("ESC")}
 			}
-			if !confirmed {
+			switch choice {
+			case "← Back":
 				return commands.CommandResult{Success: false, Error: commands.ErrBack}
+			case "Yes":
+				if err := executeSuspend(cfg); err != nil {
+					return commands.CommandResult{Success: false, Error: err}
+				}
+				return commands.CommandResult{Success: true}
+			case "No":
+				return commands.CommandResult{Success: true}
 			}
 		}
 		if err := executeSuspend(cfg); err != nil {
@@ -170,12 +186,20 @@ func executePowerAction(ctx commands.LauncherContext, cfg *Config, action string
 
 	case "Hibernate":
 		if cfg.ConfirmHibernate {
-			confirmed, confirmErr := confirmAction(ctx, "Hibernate")
-			if confirmErr != nil {
+			choice, err := confirmAction(ctx, "Hibernate")
+			if err != nil {
 				return commands.CommandResult{Success: false, Error: fmt.Errorf("ESC")}
 			}
-			if !confirmed {
+			switch choice {
+			case "← Back":
 				return commands.CommandResult{Success: false, Error: commands.ErrBack}
+			case "Yes":
+				if err := executeHibernate(cfg); err != nil {
+					return commands.CommandResult{Success: false, Error: err}
+				}
+				return commands.CommandResult{Success: true}
+			case "No":
+				return commands.CommandResult{Success: true}
 			}
 		}
 		if err := executeHibernate(cfg); err != nil {
@@ -185,12 +209,20 @@ func executePowerAction(ctx commands.LauncherContext, cfg *Config, action string
 
 	case "Reboot":
 		if cfg.ConfirmReboot {
-			confirmed, confirmErr := confirmAction(ctx, "Reboot")
-			if confirmErr != nil {
+			choice, err := confirmAction(ctx, "Reboot")
+			if err != nil {
 				return commands.CommandResult{Success: false, Error: fmt.Errorf("ESC")}
 			}
-			if !confirmed {
+			switch choice {
+			case "← Back":
 				return commands.CommandResult{Success: false, Error: commands.ErrBack}
+			case "Yes":
+				if err := executeReboot(cfg); err != nil {
+					return commands.CommandResult{Success: false, Error: err}
+				}
+				return commands.CommandResult{Success: true}
+			case "No":
+				return commands.CommandResult{Success: true}
 			}
 		}
 		if err := executeReboot(cfg); err != nil {
@@ -200,12 +232,20 @@ func executePowerAction(ctx commands.LauncherContext, cfg *Config, action string
 
 	case "Shutdown":
 		if cfg.ConfirmShutdown {
-			confirmed, confirmErr := confirmAction(ctx, "Shutdown")
-			if confirmErr != nil {
+			choice, err := confirmAction(ctx, "Shutdown")
+			if err != nil {
 				return commands.CommandResult{Success: false, Error: fmt.Errorf("ESC")}
 			}
-			if !confirmed {
+			switch choice {
+			case "← Back":
 				return commands.CommandResult{Success: false, Error: commands.ErrBack}
+			case "Yes":
+				if err := executeShutdown(cfg); err != nil {
+					return commands.CommandResult{Success: false, Error: err}
+				}
+				return commands.CommandResult{Success: true}
+			case "No":
+				return commands.CommandResult{Success: true}
 			}
 		}
 		if err := executeShutdown(cfg); err != nil {
@@ -221,13 +261,13 @@ func executePowerAction(ctx commands.LauncherContext, cfg *Config, action string
 	}
 }
 
-func confirmAction(ctx commands.LauncherContext, action string) (bool, error) {
-	options := []string{"No", "Yes"}
-	choice, err := ctx.Show(options, fmt.Sprintf("Confirm %s? ", action))
+func confirmAction(ctx commands.LauncherContext, action string) (string, error) {
+	options := []string{"← Back", "No", "Yes"}
+	choice, err := ctx.Show(options, fmt.Sprintf("Confirm %s?", action))
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	return choice == "Yes", nil
+	return choice, nil
 }
 
 func executeLogout(cfg *Config) error {

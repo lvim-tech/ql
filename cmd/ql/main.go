@@ -9,6 +9,7 @@ import (
 
 	"github.com/lvim-tech/ql/pkg/commands"
 	_ "github.com/lvim-tech/ql/pkg/commands/audiorecord"
+	_ "github.com/lvim-tech/ql/pkg/commands/bookman"
 	_ "github.com/lvim-tech/ql/pkg/commands/clipboard"
 	_ "github.com/lvim-tech/ql/pkg/commands/kill"
 	_ "github.com/lvim-tech/ql/pkg/commands/man"
@@ -255,7 +256,10 @@ func runFlatMenu(ctx launcher.Launcher, cfg *config.Config) error {
 			continue
 		}
 
-		_ = cmd.Run(ctx)
+		result := cmd.Run(ctx)
+		if errors.Is(result.Error, commands.ErrBack) {
+			continue
+		}
 
 		return nil
 	}
