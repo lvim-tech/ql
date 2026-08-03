@@ -7,13 +7,19 @@ type Config struct {
 	ListCmd string `mapstructure:"list_cmd"`
 	// UpdateCmd installs them; runs interactively in a terminal.
 	UpdateCmd string `mapstructure:"update_cmd"`
+	// RefreshCmd re-reads the repository metadata. It runs BEFORE the
+	// update, because a repository rebuilt since the last refresh serves a
+	// 404 for the version the cached metadata still names — the failure
+	// reads like a broken system and is cured by exactly this command.
+	RefreshCmd string `mapstructure:"refresh_cmd"`
 }
 
 // DefaultConfig returns the built-in defaults.
 func DefaultConfig() Config {
 	return Config{
-		Enabled:   true,
-		ListCmd:   "zypper -q lu",
-		UpdateCmd: "sudo zypper up",
+		Enabled:    true,
+		ListCmd:    "zypper -q lu",
+		UpdateCmd:  "sudo zypper up",
+		RefreshCmd: "sudo zypper ref -f",
 	}
 }

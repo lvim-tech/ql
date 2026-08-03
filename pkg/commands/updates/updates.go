@@ -87,8 +87,18 @@ func action(verb string, cfg *Config, notifCfg *config.NotificationConfig) error
 		if terminal == "" {
 			return fmt.Errorf("no terminal emulator found")
 		}
+		// Refresh first, in the same shell and behind the same password
+		// prompt. A repository rebuilt since the last refresh drops the
+		// exact rpm the cached metadata names, and the update dies on a
+		// 404 that looks like a broken machine; a forced refresh is the
+		// whole fix, so it is not left as an exercise. `|| true` because a
+		// single unreachable repository must not block the update.
+		script := cfg.UpdateCmd
+		if cfg.RefreshCmd != "" {
+			script = cfg.RefreshCmd + " || true; " + script
+		}
 		cmd := exec.Command(terminal, "-e", "sh", "-c",
-			cfg.UpdateCmd+`; echo; echo "Done — Enter closes."; read x`)
+			script+`; echo; echo "Done — Enter closes."; read x`)
 		cmd.Env = os.Environ()
 		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("failed to open terminal: %w", err)

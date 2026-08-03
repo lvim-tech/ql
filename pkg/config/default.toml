@@ -370,6 +370,9 @@ lines = 25
 enabled = true
 list_cmd = "zypper -q lu"
 update_cmd = "sudo zypper up"
+# Runs before the update: a repository rebuilt since the last refresh serves
+# a 404 for the version the cached metadata still names.
+refresh_cmd = "sudo zypper ref -f"
 # UPDATES
 
 # USBMOUNT
