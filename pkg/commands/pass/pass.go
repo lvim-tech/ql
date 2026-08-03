@@ -166,7 +166,7 @@ func perform(action, entry string, cfg *Config, notifCfg *config.NotificationCon
 		if terminal == "" {
 			return fmt.Errorf("no terminal emulator found")
 		}
-		cmd := exec.Command(terminal, "-e", cfg.Keyforge)
+		cmd := exec.Command(terminal, append(utils.TerminalArgs(terminal), "-e", cfg.Keyforge)...)
 		cmd.Env = os.Environ()
 		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("failed to open %s: %w", cfg.Keyforge, err)

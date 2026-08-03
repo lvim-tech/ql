@@ -39,7 +39,7 @@ func DisplayTextGUI(title, data string) error {
 		script := fmt.Sprintf("#!/bin/sh\ncat << 'EOF'\n%s\nEOF\necho ''\necho 'Press Enter to close... '\nread\n", data)
 		if tmpScript, err := writeTemp("ql-text-*.sh", script, 0755); err == nil {
 			defer os.Remove(tmpScript)
-			return exec.Command(terminal, "-e", tmpScript).Run()
+			return exec.Command(terminal, append(TerminalArgs(terminal), "-e", tmpScript)...).Run()
 		}
 	}
 

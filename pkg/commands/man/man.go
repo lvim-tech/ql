@@ -161,16 +161,17 @@ func openManpage(entry string, cfg *Config, globalCfg *config.Config) error {
 	}
 
 	// Get terminal
+	// A configured terminal is resolved the same way as a detected one: by name it would be
+	// looked up in PATH alone, which is exactly what a compositor keybinding does not have.
 	terminal := cfg.Terminal
+	if terminal != "" {
+		terminal = utils.Look(terminal)
+	}
 	if terminal == "" {
 		terminal = utils.DetectTerminal()
 	}
 	if terminal == "" {
-		terminal = "xterm"
-	}
-
-	if !utils.CommandExists(terminal) {
-		return fmt.Errorf("terminal not found: %s", terminal)
+		return fmt.Errorf("no terminal emulator found")
 	}
 
 	// Build pager command with -p flag for nvimpager (force pager mode)
@@ -184,7 +185,7 @@ func openManpage(entry string, cfg *Config, globalCfg *config.Config) error {
 	// The pager stays unquoted on purpose: it is the user's own config and
 	// may legitimately carry flags ("nvimpager -p").
 	script := fmt.Sprintf("man %q | %s", manName, pagerCmd)
-	cmd := exec.Command(terminal, "-e", "sh", "-c", script)
+	cmd := exec.Command(terminal, append(utils.TerminalArgs(terminal), "-e", "sh", "-c", script)...)
 	cmd.Env = os.Environ()
 
 	if err := cmd.Start(); err != nil {

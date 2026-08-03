@@ -97,8 +97,8 @@ func action(verb string, cfg *Config, notifCfg *config.NotificationConfig) error
 		if cfg.RefreshCmd != "" {
 			script = cfg.RefreshCmd + " || true; " + script
 		}
-		cmd := exec.Command(terminal, "-e", "sh", "-c",
-			script+`; echo; echo "Done — Enter closes."; read x`)
+		cmd := exec.Command(terminal, append(utils.TerminalArgs(terminal), "-e", "sh", "-c",
+			script+`; echo; echo "Done — Enter closes."; read x`)...)
 		cmd.Env = os.Environ()
 		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("failed to open terminal: %w", err)
