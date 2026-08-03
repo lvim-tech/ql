@@ -141,7 +141,7 @@ func parsePeriod(arg string) (time.Time, time.Time, error) {
 		return start, end, nil
 	}
 
-	return time.Time{}, time.Time{}, fmt.Errorf("unknown period format:  %s", arg)
+	return time.Time{}, time.Time{}, fmt.Errorf("unknown period format: %s", arg)
 }
 
 func parseTimeValue(s, unit string) float64 {

@@ -1,6 +1,6 @@
 package power
 
-// Config за power management
+// Config holds the power module settings.
 type Config struct {
 	Enabled          bool   `toml:"enabled" mapstructure:"enabled"`
 	ShowLogout       bool   `toml:"show_logout" mapstructure:"show_logout"`
@@ -20,7 +20,7 @@ type Config struct {
 	ShutdownCommand  string `toml:"shutdown_command" mapstructure:"shutdown_command"`
 }
 
-// DefaultConfig връща default настройки
+// DefaultConfig returns the built-in defaults.
 func DefaultConfig() Config {
 	return Config{
 		Enabled:          true,

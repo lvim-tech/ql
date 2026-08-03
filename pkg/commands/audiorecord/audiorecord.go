@@ -15,7 +15,6 @@ import (
 	"github.com/lvim-tech/ql/pkg/commands"
 	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/utils"
-	"github.com/mitchellh/mapstructure"
 )
 
 func init() {
@@ -27,20 +26,7 @@ func init() {
 }
 
 func Run(ctx commands.LauncherContext) commands.CommandResult {
-	cfgInterface := ctx.Config().GetAudioRecordConfig()
-
-	var cfg Config
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		WeaklyTypedInput: true,
-		Result:           &cfg,
-	})
-	if err != nil {
-		cfg = DefaultConfig()
-	} else {
-		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
-			cfg = DefaultConfig()
-		}
-	}
+	cfg := commands.DecodeConfig(ctx, "audiorecord", DefaultConfig())
 
 	if !cfg.Enabled {
 		return commands.CommandResult{
@@ -170,14 +156,14 @@ func startRecording(cfg *Config, notifCfg *config.NotificationConfig) error {
 	}
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start recording:  %w", err)
+		return fmt.Errorf("failed to start recording: %w", err)
 	}
 
 	pidFile := getPIDFile()
 	pidBytes := []byte(strconv.Itoa(cmd.Process.Pid))
 	if err := os.WriteFile(pidFile, pidBytes, 0644); err != nil {
 		cmd.Process.Kill()
-		return fmt.Errorf("failed to save PID:  %w", err)
+		return fmt.Errorf("failed to save PID: %w", err)
 	}
 
 	pathFile := getOutputPathFile()
@@ -187,10 +173,17 @@ func startRecording(cfg *Config, notifCfg *config.NotificationConfig) error {
 		return fmt.Errorf("failed to save output path: %w", err)
 	}
 
+	// Reap the recorder, but only clean up the marker files while they
+	// still belong to THIS recording: stopRecording also removes them, and
+	// a second recording started in that window would have its fresh
+	// pidfile deleted by this goroutine otherwise.
+	ownPID := []byte(strconv.Itoa(cmd.Process.Pid))
 	go func() {
 		cmd.Wait()
-		os.Remove(pidFile)
-		os.Remove(pathFile)
+		if data, err := os.ReadFile(pidFile); err == nil && strings.TrimSpace(string(data)) == string(ownPID) {
+			os.Remove(pidFile)
+			os.Remove(pathFile)
+		}
 	}()
 
 	time.Sleep(500 * time.Millisecond)
@@ -219,12 +212,12 @@ func stopRecording(notifCfg *config.NotificationConfig) error {
 
 	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
 	if err != nil {
-		return fmt.Errorf("invalid PID:  %w", err)
+		return fmt.Errorf("invalid PID: %w", err)
 	}
 
 	outputPath, err := os.ReadFile(pathFile)
 	if err != nil {
-		return fmt.Errorf("failed to read output path:  %w", err)
+		return fmt.Errorf("failed to read output path: %w", err)
 	}
 
 	process, err := os.FindProcess(pid)
@@ -280,7 +273,7 @@ func isRecording() bool {
 }
 
 func getPIDFile() string {
-	return "/tmp/ql_audiorecord. pid"
+	return "/tmp/ql_audiorecord.pid"
 }
 
 func getOutputPathFile() string {

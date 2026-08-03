@@ -1,20 +1,20 @@
 package radio
 
-// Config за radio
+// Config holds the radio module settings.
 type Config struct {
 	Enabled       bool              `toml:"enabled" mapstructure:"enabled"`
 	Volume        int64             `toml:"volume" mapstructure:"volume"`
 	RadioStations map[string]string `toml:"stations" mapstructure:"stations"`
 }
 
-// DefaultConfig връща default настройки
+// DefaultConfig returns the built-in defaults.
 func DefaultConfig() Config {
 	return Config{
 		Enabled: true,
 		Volume:  70,
 		RadioStations: map[string]string{
 			"Jazz FM":    "http://live.musictradio.com/JazzFMHigh",
-			"Classic FM": "http://media-ice.musicradio. com/ClassicFMMP3",
+			"Classic FM": "http://media-ice.musicradio.com/ClassicFMMP3",
 			"Smooth FM":  "http://live.musictradio.com/SmoothFMHigh",
 		},
 	}

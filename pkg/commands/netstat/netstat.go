@@ -3,8 +3,8 @@
 package netstat
 
 import (
+	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -12,7 +12,6 @@ import (
 	"github.com/lvim-tech/ql/pkg/commands"
 	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/utils"
-	"github.com/mitchellh/mapstructure"
 )
 
 func init() {
@@ -24,20 +23,7 @@ func init() {
 }
 
 func Run(ctx commands.LauncherContext) commands.CommandResult {
-	cfgInterface := ctx.Config().GetNetstatConfig()
-
-	var cfg Config
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		WeaklyTypedInput: true,
-		Result:           &cfg,
-	})
-	if err != nil {
-		cfg = DefaultConfig()
-	} else {
-		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
-			cfg = DefaultConfig()
-		}
-	}
+	cfg := commands.DecodeConfig(ctx, "netstat", DefaultConfig())
 
 	if !cfg.Enabled {
 		return commands.CommandResult{
@@ -93,7 +79,7 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 
 		if actionErr != nil {
-			if actionErr.Error() == "cancelled" {
+			if errors.Is(actionErr, commands.ErrCancelled) {
 				return commands.CommandResult{Success: false}
 			}
 			utils.ShowErrorNotificationWithConfig(&notifCfg, "Netstat Error", actionErr.Error())
@@ -143,11 +129,11 @@ func showTrafficMenu(ctx commands.LauncherContext, _ *Config, notifCfg *config.N
 
 	choice, err := ctx.Show(options, "Traffic Period")
 	if err != nil {
-		return fmt.Errorf("cancelled")
+		return commands.ErrCancelled
 	}
 
 	if choice == "← Back" {
-		return fmt.Errorf("cancelled")
+		return commands.ErrCancelled
 	}
 
 	var period string
@@ -243,46 +229,7 @@ func showInterfaceInfo(_ *config.NotificationConfig) error {
 
 // displayStatsGUI shows statistics in GUI dialog (yad/zenity/terminal fallback)
 func displayStatsGUI(data, title string) error {
-	if utils.CommandExists("yad") {
-		tmpFile := "/tmp/ql-netstat-data.txt"
-		if err := os.WriteFile(tmpFile, []byte(data), 0644); err == nil {
-			defer os.Remove(tmpFile)
-			cmd := exec.Command("yad",
-				"--text-info",
-				"--title="+title,
-				"--width=800",
-				"--height=600",
-				"--fontname=Monospace 10",
-				"--filename="+tmpFile)
-			cmd.Env = os.Environ()
-			return cmd.Run()
-		}
-	}
-	if utils.CommandExists("zenity") {
-		tmpFile := "/tmp/ql-netstat-data.txt"
-		if err := os.WriteFile(tmpFile, []byte(data), 0644); err == nil {
-			defer os.Remove(tmpFile)
-			cmd := exec.Command("zenity",
-				"--text-info",
-				"--title="+title,
-				"--width=800",
-				"--height=600",
-				"--filename="+tmpFile)
-			cmd.Env = os.Environ()
-			return cmd.Run()
-		}
-	}
-	terminal := utils.DetectTerminal()
-	if terminal != "" {
-		tmpScript := "/tmp/ql-netstat.sh"
-		script := fmt.Sprintf("#!/bin/sh\ncat << 'EOF'\n%s\nEOF\necho ''\necho 'Press Enter to close... '\nread\n", data)
-		if err := os.WriteFile(tmpScript, []byte(script), 0755); err == nil {
-			defer os.Remove(tmpScript)
-			return exec.Command(terminal, "-e", tmpScript).Run()
-		}
-	}
-	fmt.Println(data)
-	return nil
+	return utils.DisplayTextGUI(title, data)
 }
 
 func formatTrafficOutput(stats *NetworkStats) string {
@@ -303,9 +250,9 @@ func formatTrafficOutput(stats *NetworkStats) string {
 			fmt.Fprintf(&output, "│  IP: %s\n", iface.IP)
 		}
 
-		fmt.Fprintf(&output, "│  ↓ Downloaded:     %s\n", FormatBytes(iface.RxBytes))
-		fmt.Fprintf(&output, "│  ↑ Uploaded:     %s\n", FormatBytes(iface.TxBytes))
-		fmt.Fprintf(&output, "│  Total:          %s\n", FormatBytes(iface.RxBytes+iface.TxBytes))
+		fmt.Fprintf(&output, "│  ↓ Downloaded: %s\n", FormatBytes(iface.RxBytes))
+		fmt.Fprintf(&output, "│  ↑ Uploaded: %s\n", FormatBytes(iface.TxBytes))
+		fmt.Fprintf(&output, "│  Total: %s\n", FormatBytes(iface.RxBytes+iface.TxBytes))
 
 		duration := stats.EndTime.Sub(stats.StartTime)
 		if duration.Seconds() > 0 {
@@ -321,9 +268,9 @@ func formatTrafficOutput(stats *NetworkStats) string {
 
 	if len(stats.Interfaces) > 1 {
 		fmt.Fprintf(&output, "Total (all interfaces):\n")
-		fmt.Fprintf(&output, "  ↓ Downloaded:  %s\n", FormatBytes(stats.TotalRx))
-		fmt.Fprintf(&output, "  ↑ Uploaded:    %s\n", FormatBytes(stats.TotalTx))
-		fmt.Fprintf(&output, "  Total:         %s\n", FormatBytes(stats.TotalRx+stats.TotalTx))
+		fmt.Fprintf(&output, "  ↓ Downloaded: %s\n", FormatBytes(stats.TotalRx))
+		fmt.Fprintf(&output, "  ↑ Uploaded: %s\n", FormatBytes(stats.TotalTx))
+		fmt.Fprintf(&output, "  Total: %s\n", FormatBytes(stats.TotalRx+stats.TotalTx))
 	}
 
 	return output.String()
@@ -416,7 +363,7 @@ func formatConnectionsOutput(connections []Connection) string {
 			udpConns++
 		}
 	}
-	fmt.Fprintf(&output, "TCP:  %d connections\n", tcpConns)
+	fmt.Fprintf(&output, "TCP: %d connections\n", tcpConns)
 	fmt.Fprintf(&output, "UDP: %d connections\n\n", udpConns)
 
 	for _, conn := range connections {
@@ -429,6 +376,6 @@ func formatConnectionsOutput(connections []Connection) string {
 		}
 		output.WriteString("\n")
 	}
-	fmt.Fprintf(&output, "\nGenerated:  %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&output, "\nGenerated: %s\n", time.Now().Format("2006-01-02 15:04:05"))
 	return output.String()
 }

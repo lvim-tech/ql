@@ -1,6 +1,6 @@
 package wifi
 
-// Config за wifi
+// Config holds the wifi module settings.
 type Config struct {
 	Enabled    bool   `toml:"enabled" mapstructure:"enabled"`
 	TestHost   string `toml:"test_host" mapstructure:"test_host"`
@@ -9,7 +9,7 @@ type Config struct {
 	ShowNotify bool   `toml:"show_notify" mapstructure:"show_notify"`
 }
 
-// DefaultConfig връща default настройки
+// DefaultConfig returns the built-in defaults.
 func DefaultConfig() Config {
 	return Config{
 		Enabled:    true,

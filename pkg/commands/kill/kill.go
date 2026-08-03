@@ -11,7 +11,6 @@ import (
 	"github.com/lvim-tech/ql/pkg/commands"
 	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/utils"
-	"github.com/mitchellh/mapstructure"
 )
 
 func init() {
@@ -32,20 +31,7 @@ type Process struct {
 }
 
 func Run(ctx commands.LauncherContext) commands.CommandResult {
-	cfgInterface := ctx.Config().GetKillConfig()
-
-	var cfg Config
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		WeaklyTypedInput: true,
-		Result:           &cfg,
-	})
-	if err != nil {
-		cfg = DefaultConfig()
-	} else {
-		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
-			cfg = DefaultConfig()
-		}
-	}
+	cfg := commands.DecodeConfig(ctx, "kill", DefaultConfig())
 
 	if !cfg.Enabled {
 		return commands.CommandResult{
@@ -117,7 +103,7 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 
 	if cfg.ConfirmKill {
 		confirmOpts := []string{"← Back", "Yes", "No"}
-		confirm, err := ctx.Show(confirmOpts, fmt.Sprintf("Kill process %s (PID:       %s)?    ", selectedProc.Command, selectedProc.PID))
+		confirm, err := ctx.Show(confirmOpts, fmt.Sprintf("Kill process %s (PID: %s)?    ", selectedProc.Command, selectedProc.PID))
 		if err != nil {
 			// ESC pressed - exit completely
 			return commands.CommandResult{Success: false}
@@ -134,12 +120,12 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 
 	if err := killProcess(selectedProc.PID); err != nil {
 		utils.ShowErrorNotificationWithConfig(&notifCfg, "Kill Error",
-			fmt.Sprintf("Failed to kill process:  %v", err))
+			fmt.Sprintf("Failed to kill process: %v", err))
 		return commands.CommandResult{Success: false}
 	}
 
 	utils.NotifyWithConfig(&notifCfg, "Process Killed",
-		fmt.Sprintf("Killed %s (PID:    %s)", selectedProc.Command, selectedProc.PID))
+		fmt.Sprintf("Killed %s (PID: %s)", selectedProc.Command, selectedProc.PID))
 
 	return commands.CommandResult{Success: true}
 }
@@ -153,7 +139,7 @@ func executeDirectKill(target string, cfg *Config, notifCfg *config.Notification
 				Error:   fmt.Errorf("failed to kill PID %s: %w", target, err),
 			}
 		}
-		utils.NotifyWithConfig(notifCfg, "Process Killed", fmt.Sprintf("Killed PID:  %s", target))
+		utils.NotifyWithConfig(notifCfg, "Process Killed", fmt.Sprintf("Killed PID: %s", target))
 		return commands.CommandResult{Success: true}
 	}
 
@@ -184,7 +170,7 @@ func executeDirectKill(target string, cfg *Config, notifCfg *config.Notification
 	for _, proc := range matches {
 		if err := killProcess(proc.PID); err != nil {
 			utils.ShowErrorNotificationWithConfig(notifCfg, "Kill Error",
-				fmt.Sprintf("Failed to kill %s (PID:  %s): %v", proc.Command, proc.PID, err))
+				fmt.Sprintf("Failed to kill %s (PID: %s): %v", proc.Command, proc.PID, err))
 		} else {
 			killed = append(killed, fmt.Sprintf("%s (PID: %s)", proc.Command, proc.PID))
 		}
@@ -218,14 +204,14 @@ func getProcesses(cfg *Config) ([]Process, error) {
 	} else {
 		currentUser, err := user.Current()
 		if err != nil {
-			return nil, fmt.Errorf("failed to get current user:    %w", err)
+			return nil, fmt.Errorf("failed to get current user: %w", err)
 		}
 		cmd = exec.Command("ps", "-u", currentUser.Username, "-o", "pid,user,%cpu,%mem,comm", "--sort=-%cpu")
 	}
 
 	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get processes:    %w", err)
+		return nil, fmt.Errorf("failed to get processes: %w", err)
 	}
 
 	lines := strings.Split(string(output), "\n")

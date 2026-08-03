@@ -4,6 +4,7 @@
 package wifi
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -11,7 +12,6 @@ import (
 	"github.com/lvim-tech/ql/pkg/commands"
 	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/utils"
-	"github.com/mitchellh/mapstructure"
 )
 
 func init() {
@@ -23,20 +23,7 @@ func init() {
 }
 
 func Run(ctx commands.LauncherContext) commands.CommandResult {
-	cfgInterface := ctx.Config().GetWifiConfig()
-
-	var cfg Config
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		WeaklyTypedInput: true,
-		Result:           &cfg,
-	})
-	if err != nil {
-		cfg = DefaultConfig()
-	} else {
-		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
-			cfg = DefaultConfig()
-		}
-	}
+	cfg := commands.DecodeConfig(ctx, "wifi", DefaultConfig())
 
 	if !cfg.Enabled {
 		return commands.CommandResult{
@@ -53,6 +40,15 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 	}
 
 	notifCfg := ctx.Config().GetNotificationConfig()
+
+	// nmcli exists on machines whose network is run by something else
+	// entirely (wicked, systemd-networkd) — there every call dies with the
+	// cryptic "exit status 8". Say what is actually wrong, once, up front.
+	if err := exec.Command("nmcli", "-t", "general", "status").Run(); err != nil {
+		msg := "NetworkManager is not running — the wifi module needs it"
+		utils.ShowErrorNotificationWithConfig(&notifCfg, "WiFi Error", msg)
+		return commands.CommandResult{Success: false, Error: fmt.Errorf("%s", msg)}
+	}
 
 	// Check for direct command
 	args := ctx.Args()
@@ -104,7 +100,7 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 
 		if actionErr != nil {
 			// If error is "cancelled" - it's ESC from submenu, exit completely
-			if actionErr.Error() == "cancelled" {
+			if errors.Is(actionErr, commands.ErrCancelled) {
 				return commands.CommandResult{Success: false}
 			}
 			// Other error - show and loop back
@@ -197,7 +193,7 @@ func connectToNetworkDirect(ssid, password string, cfg *Config, notifCfg *config
 	if cfg.TestHost != "" {
 		if testErr := testConnection(cfg); testErr != nil {
 			if cfg.ShowNotify {
-				utils.ShowErrorNotificationWithConfig(notifCfg, "WiFi Warning", fmt.Sprintf("Connected but no internet:        %v", testErr))
+				utils.ShowErrorNotificationWithConfig(notifCfg, "WiFi Warning", fmt.Sprintf("Connected but no internet: %v", testErr))
 			}
 		}
 	}
@@ -257,12 +253,12 @@ func connectToNetwork(ctx commands.LauncherContext, cfg *Config, notifCfg *confi
 	choice, err := ctx.Show(networks, "Select Network")
 	if err != nil {
 		// ESC pressed - return "cancelled" to exit completely
-		return fmt.Errorf("cancelled")
+		return commands.ErrCancelled
 	}
 
 	if choice == "← Back" {
 		// Back pressed - return "cancelled" to loop back
-		return fmt.Errorf("cancelled")
+		return commands.ErrCancelled
 	}
 
 	return connectToNetworkDirect(choice, "", cfg, notifCfg)
@@ -319,7 +315,7 @@ func showCurrentConnection(cfg *Config, notifCfg *config.NotificationConfig) err
 		if strings.Contains(line, "802-11-wireless") || strings.Contains(line, "wireless") {
 			parts := strings.Split(line, ":")
 			if len(parts) >= 3 {
-				wifiInfo = fmt.Sprintf("Network: %s\nDevice:  %s", parts[0], parts[2])
+				wifiInfo = fmt.Sprintf("Network: %s\nDevice: %s", parts[0], parts[2])
 				break
 			}
 		}
@@ -363,7 +359,7 @@ func testConnection(cfg *Config) error {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("connection test failed:   %s", strings.TrimSpace(string(output)))
+		return fmt.Errorf("connection test failed: %s", strings.TrimSpace(string(output)))
 	}
 
 	return nil

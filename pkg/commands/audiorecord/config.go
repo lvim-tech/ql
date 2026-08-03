@@ -1,6 +1,6 @@
 package audiorecord
 
-// Config за audio recording
+// Config holds the audiorecord module settings.
 type Config struct {
 	Enabled    bool   `toml:"enabled" mapstructure:"enabled"`
 	SaveDir    string `toml:"save_dir" mapstructure:"save_dir"`
@@ -9,7 +9,7 @@ type Config struct {
 	Quality    string `toml:"quality" mapstructure:"quality"`
 }
 
-// DefaultConfig връща default настройки
+// DefaultConfig returns the built-in defaults.
 func DefaultConfig() Config {
 	return Config{
 		Enabled:    true,

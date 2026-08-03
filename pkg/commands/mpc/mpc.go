@@ -3,6 +3,7 @@
 package mpc
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,7 +13,6 @@ import (
 	"github.com/lvim-tech/ql/pkg/commands"
 	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/utils"
-	"github.com/mitchellh/mapstructure"
 )
 
 var mpcPath string
@@ -32,20 +32,7 @@ func runMpcCommand(args ...string) *exec.Cmd {
 }
 
 func Run(ctx commands.LauncherContext) commands.CommandResult {
-	cfgInterface := ctx.Config().GetMpcConfig()
-
-	var cfg Config
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		WeaklyTypedInput: true,
-		Result:           &cfg,
-	})
-	if err != nil {
-		cfg = DefaultConfig()
-	} else {
-		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
-			cfg = DefaultConfig()
-		}
-	}
+	cfg := commands.DecodeConfig(ctx, "mpc", DefaultConfig())
 
 	if !cfg.Enabled {
 		return commands.CommandResult{
@@ -82,7 +69,7 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 			errMsg = err.Error()
 		}
 		utils.ShowErrorNotificationWithConfig(&notifCfg, "MPC Connection Error",
-			fmt.Sprintf("MPD connection failed: %s\n\nConnection:     %s\nMPD_HOST: %s",
+			fmt.Sprintf("MPD connection failed: %s\n\nConnection: %s\nMPD_HOST: %s",
 				errMsg,
 				cfg.ConnectionType,
 				os.Getenv("MPD_HOST")))
@@ -151,7 +138,7 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 
 		if actionErr != nil {
 			// If error is "cancelled" - it's ESC from submenu, exit completely
-			if actionErr.Error() == "cancelled" {
+			if errors.Is(actionErr, commands.ErrCancelled) {
 				return commands.CommandResult{Success: false}
 			}
 			// Other error - show and loop back
@@ -374,7 +361,7 @@ func selectPlaylist(ctx commands.LauncherContext, cfg *Config, notifCfg *config.
 	choice, err := ctx.Show(playlists, "Select Playlist")
 	if err != nil {
 		// ESC pressed - return "cancelled" to exit completely
-		return fmt.Errorf("cancelled")
+		return commands.ErrCancelled
 	}
 
 	if choice == "← Back" {
@@ -410,7 +397,7 @@ func selectSong(ctx commands.LauncherContext, notifCfg *config.NotificationConfi
 	choice, err := ctx.Show(songs, "Select Song")
 	if err != nil {
 		// ESC pressed - return "cancelled" to exit completely
-		return fmt.Errorf("cancelled")
+		return commands.ErrCancelled
 	}
 
 	if choice == "← Back" {
@@ -441,7 +428,7 @@ func showCurrent(notifCfg *config.NotificationConfig) error {
 	cmd := runMpcCommand("current", "-f", "%artist% - %title%")
 	output, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to get current song:    %w", err)
+		return fmt.Errorf("failed to get current song: %w", err)
 	}
 
 	current := strings.TrimSpace(string(output))

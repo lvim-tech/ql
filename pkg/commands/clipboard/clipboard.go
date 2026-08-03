@@ -10,7 +10,6 @@ import (
 	"github.com/lvim-tech/ql/pkg/commands"
 	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/utils"
-	"github.com/mitchellh/mapstructure"
 )
 
 func init() {
@@ -22,20 +21,7 @@ func init() {
 }
 
 func Run(ctx commands.LauncherContext) commands.CommandResult {
-	cfgInterface := ctx.Config().GetClipboardConfig()
-
-	var cfg Config
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		WeaklyTypedInput: true,
-		Result:           &cfg,
-	})
-	if err != nil {
-		cfg = DefaultConfig()
-	} else {
-		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
-			cfg = DefaultConfig()
-		}
-	}
+	cfg := commands.DecodeConfig(ctx, "clipboard", DefaultConfig())
 
 	if !cfg.Enabled {
 		return commands.CommandResult{
@@ -147,14 +133,14 @@ func clearHistoryDirect(backend string, notifCfg *config.NotificationConfig) com
 	default:
 		return commands.CommandResult{
 			Success: false,
-			Error:   fmt.Errorf("unsupported backend:  %s", backend),
+			Error:   fmt.Errorf("unsupported backend: %s", backend),
 		}
 	}
 
 	if err := cmd.Run(); err != nil {
 		return commands.CommandResult{
 			Success: false,
-			Error:   fmt.Errorf("failed to clear clipboard:  %w", err),
+			Error:   fmt.Errorf("failed to clear clipboard: %w", err),
 		}
 	}
 
@@ -309,7 +295,7 @@ func clearHistory(ctx commands.LauncherContext, backend string, notifCfg *config
 	if err := cmd.Run(); err != nil {
 		return commands.CommandResult{
 			Success: false,
-			Error:   fmt.Errorf("failed to clear clipboard:  %w", err),
+			Error:   fmt.Errorf("failed to clear clipboard: %w", err),
 		}
 	}
 

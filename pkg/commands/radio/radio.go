@@ -3,13 +3,13 @@
 package radio
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/lvim-tech/ql/pkg/commands"
 	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/utils"
-	"github.com/mitchellh/mapstructure"
 )
 
 func init() {
@@ -21,20 +21,7 @@ func init() {
 }
 
 func Run(ctx commands.LauncherContext) commands.CommandResult {
-	cfgInterface := ctx.Config().GetRadioConfig()
-
-	var cfg Config
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		WeaklyTypedInput: true,
-		Result:           &cfg,
-	})
-	if err != nil {
-		cfg = DefaultConfig()
-	} else {
-		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
-			cfg = DefaultConfig()
-		}
-	}
+	cfg := commands.DecodeConfig(ctx, "radio", DefaultConfig())
 
 	if !cfg.Enabled {
 		return commands.CommandResult{
@@ -92,8 +79,10 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 
 		if actionErr != nil {
-			// If error is "cancelled" - it's ESC from submenu, exit completely
-			if actionErr.Error() == "cancelled" {
+			// ESC from the submenu exits completely. A typed sentinel, not
+			// a string compare — commands.ErrCancelled matched by text was
+			// one config change away from silently breaking.
+			if errors.Is(actionErr, commands.ErrCancelled) {
 				return commands.CommandResult{Success: false}
 			}
 			// Other error - show and loop back
@@ -158,7 +147,7 @@ func playStationDirect(stationName string, cfg *Config, notifCfg *config.Notific
 	}
 
 	if matchedURL == "" {
-		return fmt.Errorf("station not found:  %s", stationName)
+		return fmt.Errorf("station not found: %s", stationName)
 	}
 
 	// Stop any playing radio first
@@ -171,7 +160,7 @@ func playStationDirect(stationName string, cfg *Config, notifCfg *config.Notific
 	}
 
 	if err := utils.StartDetachedProcess("mpv", args...); err != nil {
-		return fmt.Errorf("failed to start radio:  %w", err)
+		return fmt.Errorf("failed to start radio: %w", err)
 	}
 
 	utils.NotifyWithConfig(notifCfg, "Radio", fmt.Sprintf("Playing: %s", matchedStation))
@@ -196,18 +185,16 @@ func playStation(ctx commands.LauncherContext, cfg *Config, notifCfg *config.Not
 
 	choice, err := ctx.Show(stations, "Select Station")
 	if err != nil {
-		// ESC pressed - return "cancelled" to exit completely
-		return fmt.Errorf("cancelled")
+		return commands.ErrCancelled
 	}
 
 	if choice == "← Back" {
-		// Back pressed - return "cancelled" to loop back
-		return fmt.Errorf("cancelled")
+		return commands.ErrCancelled
 	}
 
 	url, ok := stationMap[choice]
 	if !ok {
-		return fmt.Errorf("station not found:      %s", choice)
+		return fmt.Errorf("station not found: %s", choice)
 	}
 
 	stopRadio(notifCfg)
@@ -219,7 +206,7 @@ func playStation(ctx commands.LauncherContext, cfg *Config, notifCfg *config.Not
 	}
 
 	if err := utils.StartDetachedProcess("mpv", args...); err != nil {
-		return fmt.Errorf("failed to start radio:    %w", err)
+		return fmt.Errorf("failed to start radio: %w", err)
 	}
 
 	utils.NotifyWithConfig(notifCfg, "Radio", fmt.Sprintf("Playing: %s", choice))

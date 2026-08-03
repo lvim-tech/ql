@@ -65,11 +65,16 @@ func Load() (*Config, error) {
 	}
 
 	var userCfg Config
-	if _, err := toml.DecodeFile(userConfigPath, &userCfg); err != nil {
-		return nil, fmt.Errorf("failed to decode user config: %w", err)
+	meta, err := toml.DecodeFile(userConfigPath, &userCfg)
+	if err != nil {
+		// A broken user config must not brick the launcher — it is usually
+		// bound to a key, where a hard exit looks like nothing happened at
+		// all. Complain where it can be seen and run on the defaults.
+		fmt.Fprintf(os.Stderr, "ql: ignoring malformed %s: %v\n", userConfigPath, err)
+		return &defaultCfg, nil
 	}
 
-	mergedCfg := mergeConfigs(defaultCfg, userCfg)
+	mergedCfg := mergeConfigs(defaultCfg, userCfg, meta)
 	return &mergedCfg, nil
 }
 
@@ -95,8 +100,10 @@ func GetUserConfigPath() string {
 	return filepath.Join(home, ".config", "ql", "config.toml")
 }
 
-// mergeConfigs deep merges user config into default config
-func mergeConfigs(defaultCfg, userCfg Config) Config {
+// mergeConfigs deep merges user config into default config. meta says which
+// keys the user actually WROTE — the only way to tell `enabled = false` from
+// an omitted key, since both decode to the zero value.
+func mergeConfigs(defaultCfg, userCfg Config, meta toml.MetaData) Config {
 	result := defaultCfg
 
 	// Merge simple string fields
@@ -127,11 +134,29 @@ func mergeConfigs(defaultCfg, userCfg Config) Config {
 		result.ModuleGroupsOrder = userCfg.ModuleGroupsOrder
 	}
 
-	// Merge maps
+	// Merge maps. Groups merge FIELD BY FIELD: a whole-value copy meant that
+	// [module_groups.system] with only `name = "Sys"` wiped the group's
+	// modules and disabled it — partial override was impossible.
 	if result.ModuleGroups == nil {
 		result.ModuleGroups = make(map[string]ModuleGroup)
 	}
-	maps.Copy(result.ModuleGroups, userCfg.ModuleGroups)
+	for key, userGroup := range userCfg.ModuleGroups {
+		group, exists := result.ModuleGroups[key]
+		if !exists {
+			result.ModuleGroups[key] = userGroup
+			continue
+		}
+		if meta.IsDefined("module_groups", key, "name") {
+			group.Name = userGroup.Name
+		}
+		if meta.IsDefined("module_groups", key, "enabled") {
+			group.Enabled = userGroup.Enabled
+		}
+		if meta.IsDefined("module_groups", key, "modules") {
+			group.Modules = userGroup.Modules
+		}
+		result.ModuleGroups[key] = group
+	}
 
 	if result.Launchers == nil {
 		result.Launchers = make(map[string]LauncherConfig)
@@ -148,8 +173,14 @@ func mergeConfigs(defaultCfg, userCfg Config) Config {
 	if userCfg.Notifications.Urgency != "" {
 		result.Notifications.Urgency = userCfg.Notifications.Urgency
 	}
-	result.Notifications.Enabled = userCfg.Notifications.Enabled || result.Notifications.Enabled
-	result.Notifications.ShowInTerminal = userCfg.Notifications.ShowInTerminal
+	// Booleans only when the key was written: the old `user || default`
+	// with a true default made `enabled = false` impossible to express.
+	if meta.IsDefined("notifications", "enabled") {
+		result.Notifications.Enabled = userCfg.Notifications.Enabled
+	}
+	if meta.IsDefined("notifications", "show_in_terminal") {
+		result.Notifications.ShowInTerminal = userCfg.Notifications.ShowInTerminal
+	}
 
 	// Merge commands
 	if result.Commands == nil {
@@ -180,25 +211,11 @@ func (c *Config) GetMenuStyle() string {
 	return c.MenuStyle
 }
 
-func (c *Config) GetPdfViewer() string {
-	if c.PdfViewer == "" {
-		return "zathura"
-	}
-	return c.PdfViewer
-}
-
 func (c *Config) GetBrowser() string {
 	if c.Browser == "" {
 		return "firefox"
 	}
 	return c.Browser
-}
-
-func (c *Config) GetEditor() string {
-	if c.Editor == "" {
-		return "vim"
-	}
-	return c.Editor
 }
 
 func (c *Config) GetManViewer() string {
@@ -247,60 +264,4 @@ func (c *Config) GetLauncherConfig(name string) LauncherConfig {
 
 func (c *Config) GetNotificationConfig() NotificationConfig {
 	return c.Notifications
-}
-
-// ============================================================================
-// MODULE CONFIGS (alphabetically sorted)
-// ============================================================================
-
-func (c *Config) GetAudioRecordConfig() any {
-	return c.Commands["audiorecord"]
-}
-
-func (c *Config) GetClipboardConfig() any {
-	return c.Commands["clipboard"]
-}
-
-func (c *Config) GetKillConfig() any {
-	return c.Commands["kill"]
-}
-
-func (c *Config) GetManConfig() any {
-	return c.Commands["man"]
-}
-
-func (c *Config) GetMpcConfig() any {
-	return c.Commands["mpc"]
-}
-
-func (c *Config) GetPowerConfig() any {
-	return c.Commands["power"]
-}
-
-func (c *Config) GetRadioConfig() any {
-	return c.Commands["radio"]
-}
-
-func (c *Config) GetScreenshotConfig() any {
-	return c.Commands["screenshot"]
-}
-
-func (c *Config) GetVideoRecordConfig() any {
-	return c.Commands["videorecord"]
-}
-
-func (c *Config) GetWeatherConfig() any {
-	return c.Commands["weather"]
-}
-
-func (c *Config) GetWifiConfig() any {
-	return c.Commands["wifi"]
-}
-
-func (c *Config) GetNetstatConfig() any {
-	return c.Commands["netstat"]
-}
-
-func (c *Config) GetBookmanConfig() any {
-	return c.Commands["bookman"]
 }

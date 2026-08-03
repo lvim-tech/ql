@@ -11,7 +11,6 @@ import (
 	"github.com/lvim-tech/ql/pkg/commands"
 	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/utils"
-	"github.com/mitchellh/mapstructure"
 )
 
 func init() {
@@ -23,20 +22,7 @@ func init() {
 }
 
 func Run(ctx commands.LauncherContext) commands.CommandResult {
-	cfgInterface := ctx.Config().GetManConfig()
-
-	var cfg Config
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		WeaklyTypedInput: true,
-		Result:           &cfg,
-	})
-	if err != nil {
-		cfg = DefaultConfig()
-	} else {
-		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
-			cfg = DefaultConfig()
-		}
-	}
+	cfg := commands.DecodeConfig(ctx, "man", DefaultConfig())
 
 	if !cfg.Enabled {
 		return commands.CommandResult{
@@ -111,7 +97,7 @@ func getAllManpages(cfg *Config) ([]string, error) {
 	cmd := exec.Command("man", "-k", ".")
 	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get manpages:     %w", err)
+		return nil, fmt.Errorf("failed to get manpages: %w", err)
 	}
 
 	lines := strings.Split(string(output), "\n")
@@ -184,7 +170,7 @@ func openManpage(entry string, cfg *Config, globalCfg *config.Config) error {
 	}
 
 	if !utils.CommandExists(terminal) {
-		return fmt.Errorf("terminal not found:  %s", terminal)
+		return fmt.Errorf("terminal not found: %s", terminal)
 	}
 
 	// Build pager command with -p flag for nvimpager (force pager mode)
@@ -193,8 +179,11 @@ func openManpage(entry string, cfg *Config, globalCfg *config.Config) error {
 		pagerCmd = pager + " -p"
 	}
 
-	// Use man piped to pager (no read at the end)
-	script := fmt.Sprintf("man %s | %s", manName, pagerCmd)
+	// The page name comes from `man -k` output — third-party packages get a
+	// say in it, so it goes into the shell quoted, not interpolated raw.
+	// The pager stays unquoted on purpose: it is the user's own config and
+	// may legitimately carry flags ("nvimpager -p").
+	script := fmt.Sprintf("man %q | %s", manName, pagerCmd)
 	cmd := exec.Command(terminal, "-e", "sh", "-c", script)
 	cmd.Env = os.Environ()
 

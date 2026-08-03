@@ -6,15 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/lvim-tech/ql/pkg/commands"
 	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/utils"
-	"github.com/mitchellh/mapstructure"
 )
 
 func init() {
@@ -26,20 +23,7 @@ func init() {
 }
 
 func Run(ctx commands.LauncherContext) commands.CommandResult {
-	cfgInterface := ctx.Config().GetWeatherConfig()
-
-	var cfg Config
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		WeaklyTypedInput: true,
-		Result:           &cfg,
-	})
-	if err != nil {
-		cfg = DefaultConfig()
-	} else {
-		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
-			cfg = DefaultConfig()
-		}
-	}
+	cfg := commands.DecodeConfig(ctx, "weather", DefaultConfig())
 
 	if !cfg.Enabled {
 		return commands.CommandResult{
@@ -160,7 +144,7 @@ func fetchWeather(location string, options string, timeout int) (string, error) 
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create request:     %w", err)
+		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("User-Agent", "curl/7.88.0")
@@ -197,49 +181,5 @@ func displayWeatherTerminal(data string) error {
 }
 
 func displayWeatherGUI(data string) error {
-	if utils.CommandExists("yad") {
-		tmpFile := "/tmp/ql-weather-data.txt"
-		if err := os.WriteFile(tmpFile, []byte(data), 0644); err == nil {
-			defer os.Remove(tmpFile)
-
-			cmd := exec.Command("yad",
-				"--text-info",
-				"--title=Weather",
-				"--width=800",
-				"--height=600",
-				"--fontname=Monospace 10",
-				"--filename="+tmpFile)
-			cmd.Env = os.Environ()
-			return cmd.Run()
-		}
-	}
-
-	if utils.CommandExists("zenity") {
-		tmpFile := "/tmp/ql-weather-data.txt"
-		if err := os.WriteFile(tmpFile, []byte(data), 0644); err == nil {
-			defer os.Remove(tmpFile)
-
-			cmd := exec.Command("zenity",
-				"--text-info",
-				"--title=Weather",
-				"--width=800",
-				"--height=600",
-				"--filename="+tmpFile)
-			cmd.Env = os.Environ()
-			return cmd.Run()
-		}
-	}
-
-	terminal := utils.DetectTerminal()
-	if terminal != "" {
-		tmpScript := "/tmp/ql-weather. sh"
-		script := fmt.Sprintf("#!/bin/sh\ncat << 'EOF'\n%s\nEOF\necho ''\necho 'Press Enter to close... '\nread\n", data)
-
-		if err := os.WriteFile(tmpScript, []byte(script), 0755); err == nil {
-			defer os.Remove(tmpScript)
-			return exec.Command(terminal, "-e", tmpScript).Run()
-		}
-	}
-
-	return displayWeatherTerminal(data)
+	return utils.DisplayTextGUI("Weather", data)
 }

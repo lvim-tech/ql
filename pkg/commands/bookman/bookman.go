@@ -8,8 +8,7 @@ import (
 	"fmt"
 	"github.com/lvim-tech/ql/pkg/commands"
 	"github.com/lvim-tech/ql/pkg/utils"
-	_ "github.com/mattn/go-sqlite3"
-	"github.com/mitchellh/mapstructure"
+	_ "modernc.org/sqlite"
 	"os"
 	"os/exec"
 	"strings"
@@ -37,20 +36,7 @@ func init() {
 // It aggregates bookmarks/quickmarks/entries from all configured sources
 // and opens a selected URL in the browser defined in the global config.
 func Run(ctx commands.LauncherContext) commands.CommandResult {
-	cfgInterface := ctx.Config().GetBookmanConfig()
-
-	var cfg Config
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		WeaklyTypedInput: true,
-		Result:           &cfg,
-	})
-	if err != nil {
-		cfg = Config{Enabled: true}
-	} else {
-		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
-			cfg = Config{Enabled: true}
-		}
-	}
+	cfg := commands.DecodeConfig(ctx, "bookman", Config{Enabled: true})
 
 	if !cfg.Enabled {
 		return commands.CommandResult{
@@ -138,7 +124,12 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 	if browser == "" {
 		browser = "qutebrowser"
 	}
-	exec.Command(browser, url).Start()
+	// Surface a missing browser: a discarded Start() used to report
+	// Success while nothing opened.
+	if err := exec.Command(browser, url).Start(); err != nil {
+		utils.ShowErrorNotificationWithConfig(&notifCfg, "Bookman", fmt.Sprintf("failed to open %s: %v", browser, err))
+		return commands.CommandResult{Success: false, Error: err}
+	}
 
 	return commands.CommandResult{Success: true}
 }
@@ -249,12 +240,16 @@ func parseChromeBookmarksJSON(srcName, path string) ([]Entry, error) {
 	return result, nil
 }
 
-// parseFirefoxBookmarks parses bookmarks from a Firefox places.sqlite file using go-sqlite3.
+// parseFirefoxBookmarks parses bookmarks from a Firefox places.sqlite file.
 // Returns the newest 200 bookmarks with titles.
+//
+// modernc.org/sqlite, not mattn: this one function was the repo's only cgo,
+// the price of which was no CGO_ENABLED=0 and no easy cross-compilation.
+// immutable=1 because a RUNNING Firefox holds the database in WAL mode and
+// a plain open fails on the lock — read-only immutable access does not.
 func parseFirefoxBookmarks(srcName, path string) ([]Entry, error) {
-	db, err := sql.Open("sqlite3", path)
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&immutable=1")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "BOOKMAN DEBUG: sqlite open error for %q: %v\n", path, err)
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 	defer db.Close()
@@ -269,13 +264,11 @@ func parseFirefoxBookmarks(srcName, path string) ([]Entry, error) {
 	`
 	rows, err := db.Query(q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "BOOKMAN DEBUG: sqlite query error: %v\n", err)
 		return nil, fmt.Errorf("sqlite query: %w", err)
 	}
 	defer rows.Close()
 
 	var result []Entry
-	count := 0
 	for rows.Next() {
 		var title, url string
 		if err := rows.Scan(&title, &url); err != nil {
@@ -284,16 +277,13 @@ func parseFirefoxBookmarks(srcName, path string) ([]Entry, error) {
 		if title == "" {
 			title = "[untitled]"
 		}
-		count++
 		result = append(result, Entry{
 			Source:  srcName,
 			Display: fmt.Sprintf("[F] %s - %s", title, url),
 			URL:     url,
 		})
 	}
-	fmt.Fprintf(os.Stderr, "BOOKMAN DEBUG: Firefox loaded %d entries\n", count)
 	if err := rows.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "BOOKMAN DEBUG: rows error: %v\n", err)
 		return result, err
 	}
 	return result, nil

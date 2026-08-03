@@ -36,6 +36,12 @@ func NotifyWithConfig(cfg *config.NotificationConfig, title, message string) {
 
 // ShowErrorNotificationWithConfig sends an error notification using the provided config
 func ShowErrorNotificationWithConfig(cfg *config.NotificationConfig, title, message string) {
+	// Every error notification also lands in the log — notifications
+	// evaporate from the screen, and with them the only trace of what
+	// failed. Logged BEFORE the enabled check: disabled notifications must
+	// not mean undiagnosable errors.
+	Logf("[%s] %s", title, message)
+
 	if cfg == nil || !cfg.Enabled {
 		return
 	}
@@ -183,52 +189,3 @@ func sendNotification(tool, title, message string, timeout int, urgency, fallbac
 // ============================================================================
 // Backward Compatibility Helpers (deprecated, use WithConfig versions)
 // ============================================================================
-
-// Notify sends a notification using default settings
-// Deprecated: Use NotifyWithConfig with proper config instead
-func Notify(title, message string) {
-	defaultCfg := &config.NotificationConfig{
-		Enabled:        true,
-		Tool:           "auto",
-		Timeout:        5000,
-		Urgency:        "normal",
-		ShowInTerminal: false,
-	}
-	NotifyWithConfig(defaultCfg, title, message)
-}
-
-// ShowErrorNotification sends an error notification using default settings
-// Deprecated: Use ShowErrorNotificationWithConfig with proper config instead
-func ShowErrorNotification(title, message string) {
-	defaultCfg := &config.NotificationConfig{
-		Enabled:        true,
-		Tool:           "auto",
-		Timeout:        10000,
-		Urgency:        "critical",
-		ShowInTerminal: false,
-	}
-	ShowErrorNotificationWithConfig(defaultCfg, title, message)
-}
-
-// ShowPersistentNotification shows a persistent notification using default settings
-// Deprecated:  Use ShowPersistentNotificationWithConfig with proper config instead
-func ShowPersistentNotification(title, message string) int {
-	defaultCfg := &config.NotificationConfig{
-		Enabled:        true,
-		Tool:           "auto",
-		Timeout:        0,
-		Urgency:        "normal",
-		ShowInTerminal: false,
-	}
-	return ShowPersistentNotificationWithConfig(defaultCfg, title, message)
-}
-
-// ClosePersistentNotification closes a persistent notification using default settings
-// Deprecated: Use ClosePersistentNotificationWithConfig with proper config instead
-func ClosePersistentNotification(notifyID int) {
-	defaultCfg := &config.NotificationConfig{
-		Enabled: true,
-		Tool:    "auto",
-	}
-	ClosePersistentNotificationWithConfig(defaultCfg, notifyID)
-}

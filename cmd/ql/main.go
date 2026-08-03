@@ -5,28 +5,41 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 
 	"github.com/lvim-tech/ql/pkg/commands"
+	_ "github.com/lvim-tech/ql/pkg/commands/audioout"
 	_ "github.com/lvim-tech/ql/pkg/commands/audiorecord"
 	_ "github.com/lvim-tech/ql/pkg/commands/bookman"
 	_ "github.com/lvim-tech/ql/pkg/commands/clipboard"
+	_ "github.com/lvim-tech/ql/pkg/commands/kb"
 	_ "github.com/lvim-tech/ql/pkg/commands/kill"
+	_ "github.com/lvim-tech/ql/pkg/commands/mail"
 	_ "github.com/lvim-tech/ql/pkg/commands/man"
 	_ "github.com/lvim-tech/ql/pkg/commands/mpc"
 	_ "github.com/lvim-tech/ql/pkg/commands/netstat"
+	_ "github.com/lvim-tech/ql/pkg/commands/pass"
 	_ "github.com/lvim-tech/ql/pkg/commands/power"
 	_ "github.com/lvim-tech/ql/pkg/commands/radio"
 	_ "github.com/lvim-tech/ql/pkg/commands/screenshot"
+	_ "github.com/lvim-tech/ql/pkg/commands/sysinfo"
+	_ "github.com/lvim-tech/ql/pkg/commands/theme"
+	_ "github.com/lvim-tech/ql/pkg/commands/updates"
+	_ "github.com/lvim-tech/ql/pkg/commands/usbmount"
 	_ "github.com/lvim-tech/ql/pkg/commands/videorecord"
 	_ "github.com/lvim-tech/ql/pkg/commands/weather"
 	_ "github.com/lvim-tech/ql/pkg/commands/wifi"
 	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/launcher"
+	"github.com/lvim-tech/ql/pkg/utils"
 )
+
+// version is the release the binary reports; the git tags carry the same
+// number with the Alpha prefix.
+const version = "0.8"
 
 func main() {
 	if err := run(); err != nil {
+		utils.Logf("[fatal] %v", err)
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -38,7 +51,7 @@ func run() error {
 	helpFlag := flag.Bool("help", false, "Show help")
 	flatFlag := flag.Bool("flat", false, "Use flat menu style")
 	groupedFlag := flag.Bool("grouped", false, "Use grouped menu style")
-	launcherFlag := flag.String("launcher", "", "Override launcher (rofi, dmenu, fzf, bemenu, fuzzel)")
+	launcherFlag := flag.String("launcher", "", "Override launcher (rofi, dmenu, fzf, bemenu, fuzzel, tui, auto)")
 	groupFlag := flag.String("group", "", "Show only commands from specific group")
 
 	flag.Parse()
@@ -48,7 +61,7 @@ func run() error {
 	}
 
 	if *versionFlag {
-		fmt.Println("ql version 0.1.0")
+		fmt.Println("ql version " + version)
 		return nil
 	}
 
@@ -57,12 +70,16 @@ func run() error {
 		return nil
 	}
 
-	if len(os.Args) > 1 && !flag.Parsed() {
-		switch os.Args[1] {
+	// The legacy subcommand forms (ql init / version / help). These have to
+	// be read from flag.Args(): flag.Parse() already ran, so a guard on
+	// !flag.Parsed() can never be entered — that was exactly the bug that
+	// made all three documented forms silently open the menu instead.
+	if args := flag.Args(); len(args) > 0 {
+		switch args[0] {
 		case "init":
 			return handleInit()
 		case "version":
-			fmt.Println("ql version 0.1.0")
+			fmt.Println("ql version " + version)
 			return nil
 		case "help":
 			printHelp()
@@ -252,13 +269,20 @@ func runFlatMenu(ctx launcher.Launcher, cfg *config.Config) error {
 
 		cmd, ok := optionToCommand[choice]
 		if !ok {
-			showErrorNotification("Error", fmt.Sprintf("Unknown command: %s", choice))
+			showErrorNotification(cfg, "Error", fmt.Sprintf("Unknown command: %s", choice))
 			continue
 		}
 
 		result := cmd.Run(ctx)
 		if errors.Is(result.Error, commands.ErrBack) {
 			continue
+		}
+
+		// The flat menu exits regardless of the outcome; a real module
+		// error used to vanish right here, notified once and never
+		// recorded.
+		if result.Error != nil && !errors.Is(result.Error, commands.ErrCancelled) {
+			utils.Logf("[%s] %v", cmd.Name, result.Error)
 		}
 
 		return nil
@@ -293,9 +317,13 @@ func runGroupedMenu(ctx launcher.Launcher, cfg *config.Config) error {
 				continue
 			}
 
+			// Registry membership too, not just config: isCommandEnabled
+			// answers true for a name it has never heard of, so a group
+			// listing only nonexistent modules showed up in the menu and
+			// dead-ended on selection.
 			hasEnabled := false
 			for _, moduleName := range group.Modules {
-				if isCommandEnabled(cfg, moduleName) {
+				if _, registered := commandMap[moduleName]; registered && isCommandEnabled(cfg, moduleName) {
 					hasEnabled = true
 					break
 				}
@@ -318,7 +346,7 @@ func runGroupedMenu(ctx launcher.Launcher, cfg *config.Config) error {
 
 		selectedGroup, exists := groupMap[groupChoice]
 		if !exists {
-			showErrorNotification("Error", fmt.Sprintf("Unknown group: %s", groupChoice))
+			showErrorNotification(cfg, "Error", fmt.Sprintf("Unknown group: %s", groupChoice))
 			continue
 		}
 
@@ -369,7 +397,7 @@ func runModuleMenuDirect(ctx launcher.Launcher, cfg *config.Config, group config
 
 		cmd, ok := moduleToCommand[moduleChoice]
 		if !ok {
-			showErrorNotification("Error", fmt.Sprintf("Unknown command: %s", moduleChoice))
+			showErrorNotification(cfg, "Error", fmt.Sprintf("Unknown command: %s", moduleChoice))
 			continue
 		}
 
@@ -421,7 +449,7 @@ func runModuleMenuWithBack(ctx launcher.Launcher, cfg *config.Config, group conf
 
 		cmd, ok := moduleToCommand[moduleChoice]
 		if !ok {
-			showErrorNotification("Error", fmt.Sprintf("Unknown command: %s", moduleChoice))
+			showErrorNotification(cfg, "Error", fmt.Sprintf("Unknown command: %s", moduleChoice))
 			continue
 		}
 
@@ -454,28 +482,11 @@ func isCommandEnabled(cfg *config.Config, cmdName string) bool {
 	return true
 }
 
-func showErrorNotification(title, message string) {
-	if _, err := exec.LookPath("dunstify"); err == nil {
-		cmd := exec.Command("dunstify",
-			"-u", "critical",
-			"-t", "5000",
-			title,
-			message)
-		cmd.Env = os.Environ()
-		cmd.Start()
-		return
-	}
-
-	if _, err := exec.LookPath("notify-send"); err == nil {
-		cmd := exec.Command("notify-send",
-			"-u", "critical",
-			"-t", "5000",
-			title,
-			message)
-		cmd.Env = os.Environ()
-		cmd.Start()
-		return
-	}
+// showErrorNotification goes through pkg/utils — this file used to carry a
+// verbatim copy of the dunstify/notify-send fan-out that lives there.
+func showErrorNotification(cfg *config.Config, title, message string) {
+	notifCfg := cfg.GetNotificationConfig()
+	utils.ShowErrorNotificationWithConfig(&notifCfg, title, message)
 }
 
 func handleInit() error {
@@ -498,16 +509,16 @@ func printHelp() {
 	fmt.Println("  ql [options] [module] [subcommand]")
 	fmt.Println()
 	fmt.Println("Options:")
-	fmt.Println("  --init              Initialize user config (~/.config/ql/config. toml)")
+	fmt.Println("  --init              Initialize user config (~/.config/ql/config.toml)")
 	fmt.Println("  --version           Show version information")
 	fmt.Println("  --help              Show this help message")
 	fmt.Println("  --flat              Use flat menu style")
 	fmt.Println("  --grouped           Use grouped menu style")
-	fmt.Println("  --launcher NAME     Override launcher (rofi, dmenu, fzf, bemenu, fuzzel)")
+	fmt.Println("  --launcher NAME     Override launcher (rofi, dmenu, fzf, bemenu, fuzzel, tui, auto)")
 	fmt.Println("  --group NAME        Show only commands from specific group")
 	fmt.Println()
 	fmt.Println("Available groups:")
-	fmt.Println("  system, network, media, info")
+	fmt.Println("  system, network, media, info, secrets")
 	fmt.Println()
 	fmt.Println("Direct module access:")
 	fmt.Println("  ql power            Run power module menu")
@@ -515,6 +526,10 @@ func printHelp() {
 	fmt.Println("  ql power shutdown   Execute shutdown directly")
 	fmt.Println("  ql clipboard        Run clipboard module")
 	fmt.Println("  ql kill             Run kill module")
+	fmt.Println("  ql kb bg            Set the keyboard layout (bg, en, next, prev)")
+	fmt.Println("  ql pass type        Pick an entry and type its password")
+	fmt.Println("  ql sysinfo cpu      Processes behind the CPU number (waybar on-click)")
+	fmt.Println("  ql theme            Switch the desktop theme through themer")
 	fmt.Println()
 	fmt.Println("Legacy usage (still supported):")
 	fmt.Println("  ql [launcher]       Run ql with specified launcher")
@@ -530,5 +545,5 @@ func printHelp() {
 	fmt.Println("  ql --grouped")
 	fmt.Println("  ql --group system")
 	fmt.Println()
-	fmt.Println("Config file: ~/.config/ql/config. toml")
+	fmt.Println("Config file: ~/.config/ql/config.toml")
 }

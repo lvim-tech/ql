@@ -1,6 +1,6 @@
 package videorecord
 
-// Config за video recording
+// Config holds the videorecord module settings.
 type Config struct {
 	Enabled     bool          `toml:"enabled" mapstructure:"enabled"`
 	SaveDir     string        `toml:"save_dir" mapstructure:"save_dir"`
@@ -29,7 +29,7 @@ type WaylandConfig struct {
 	AudioCodec string `toml:"audio_codec" mapstructure:"audio_codec"`
 }
 
-// DefaultConfig връща default настройки
+// DefaultConfig returns the built-in defaults.
 func DefaultConfig() Config {
 	return Config{
 		Enabled:     true,

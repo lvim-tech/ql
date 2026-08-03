@@ -11,14 +11,21 @@ man_viewer = "nvimpager"
 # DEFAULTS
 
 # MODULE GROUPS DISPLAY ORDER (grouped menu)
-module_groups_order = ["system", "network", "media", "info"]
+module_groups_order = ["system", "network", "media", "info", "secrets"]
 # MODULE GROUPS DISPLAY ORDER (grouped menu)
 
 # MODULE EXECUTION ORDER (flat menu)
 module_order = [
     "power",
-    "usb",
     "kill",
+    "usbmount",
+    "sysinfo",
+    "updates",
+    "theme",
+    "kb",
+    "audioout",
+    "mail",
+    "pass",
     "clipboard",
     "screenshot",
     "wifi",
@@ -42,29 +49,37 @@ urgency = "normal"
 show_in_terminal = false
 # NOTIFICATION
 
-# LAUNCERS
+# LAUNCHERS
+#
+# The prompt flag is NOT configured here — each backend appends its own
+# (-p / --prompt) after these args. Listing it here too produced argv like
+# `dmenu -i -p -p ql` and an fzf --prompt that swallowed --height=40%.
 [launchers.rofi]
 args = ["-dmenu", "-i"]
 
 [launchers.dmenu]
-args = ["-i", "-p"]
+args = ["-i"]
 
 [launchers.fzf]
-args = ["--prompt", "--height=40%", "--reverse"]
+args = ["--height=40%", "--reverse"]
 
 [launchers.bemenu]
-args = ["-i", "-p"]
+args = ["-i"]
 
 [launchers.fuzzel]
-args = ["--dmenu", "--prompt"]
-# LAUNCERS
+args = ["--dmenu"]
+
+# The built-in Bubble Tea menu takes no external arguments.
+[launchers.tui]
+args = []
+# LAUNCHERS
 
 ###                                                     MODULE GROUP SYSTEM
 
 [module_groups.system]
 name = "System"
 enabled = true
-modules = ["power", "usb", "kill", "clipboard", "screenshot"]
+modules = ["power", "kill", "clipboard", "screenshot", "usbmount", "sysinfo", "updates", "theme", "kb"]
 
 # POWER
 [commands.power]
@@ -86,9 +101,6 @@ reboot_command = "systemctl reboot"
 shutdown_command = "systemctl poweroff"
 # POWER
 
-# USB
-[commands.usb]
-# USB
 
 # KILL
 [commands.kill]
@@ -119,7 +131,7 @@ file_prefix = "screenshot"
 [module_groups.network]
 name = "Network"
 enabled = true
-modules = ["wifi", "bookman", "netstat"]
+modules = ["wifi", "bookman", "netstat", "mail"]
 
 # WIFI
 [commands.wifi]
@@ -170,7 +182,7 @@ prefer_vnstat = true
 [module_groups.media]
 name = "Media"
 enabled = true
-modules = ["radio", "mpc", "audiorecord", "videorecord"]
+modules = ["radio", "mpc", "audiorecord", "videorecord", "audioout"]
 
 # RADIO
 [commands.radio]
@@ -246,12 +258,13 @@ show_descriptions = true
 max_results = 100
 # MAN
 
-###                                                     MODULE GROUP INFO
+###                                                     MODULE GROUP SECRETS
 
-[module_groups.files]
-name = "Info"
+[module_groups.secrets]
+name = "Secrets"
 enabled = true
-modules = ["pdf", "doc"]
+modules = ["pass"]
+
 # MODULE GROUPS
 
 [commands.radio.stations]
@@ -331,3 +344,56 @@ modules = ["pdf", "doc"]
 "Radio Caprice Synthwave" = "https://radio.caprice.fm/synthwave.mp3"
 "DataWave FM" = "https://datawave.fm/mp3"
 "Retrowave One" = "https://retrowave.one/live"
+
+
+# THEME — bridge to themer
+[commands.theme]
+enabled = true
+bin = "themer"
+# THEME
+
+# KB — keyboard layout; layouts are DETECTED from the session (mango config,
+# Hyprland/sway IPC, setxkbmap, localectl). Set them only to override.
+[commands.kb]
+enabled = true
+# layouts = ["us", "bg"]
+# KB
+
+# SYSINFO — the detail behind the waybar numbers (on-click target)
+[commands.sysinfo]
+enabled = true
+lines = 25
+# SYSINFO
+
+# UPDATES
+[commands.updates]
+enabled = true
+list_cmd = "zypper -q lu"
+update_cmd = "sudo zypper up"
+# UPDATES
+
+# USBMOUNT
+[commands.usbmount]
+enabled = true
+# USBMOUNT
+
+# AUDIOOUT
+[commands.audioout]
+enabled = true
+# AUDIOOUT
+
+# MAIL
+[commands.mail]
+enabled = true
+status_cmd = "~/bin/mailstatus"
+sync_cmd = "mbsync -a"
+client_cmd = "neomutt"
+# MAIL
+
+# PASS — the unix password store; keyforge generates and audits
+[commands.pass]
+enabled = true
+store = "~/.password-store"
+type_delay_ms = 200
+keyforge = "keyforge"
+# PASS

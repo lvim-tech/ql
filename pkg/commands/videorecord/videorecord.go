@@ -3,6 +3,7 @@
 package videorecord
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,7 +15,6 @@ import (
 	"github.com/lvim-tech/ql/pkg/commands"
 	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/utils"
-	"github.com/mitchellh/mapstructure"
 )
 
 func init() {
@@ -26,20 +26,7 @@ func init() {
 }
 
 func Run(ctx commands.LauncherContext) commands.CommandResult {
-	cfgInterface := ctx.Config().GetVideoRecordConfig()
-
-	var cfg Config
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		WeaklyTypedInput: true,
-		Result:           &cfg,
-	})
-	if err != nil {
-		cfg = DefaultConfig()
-	} else {
-		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
-			cfg = DefaultConfig()
-		}
-	}
+	cfg := commands.DecodeConfig(ctx, "videorecord", DefaultConfig())
 
 	if !cfg.Enabled {
 		return commands.CommandResult{
@@ -93,8 +80,9 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 		}
 
 		if actionErr != nil {
-			// If error is "cancelled" - it's ESC from submenu, exit completely
-			if actionErr.Error() == "cancelled" {
+			// ESC from the submenu exits completely — a typed sentinel, not
+			// a string compare.
+			if errors.Is(actionErr, commands.ErrCancelled) {
 				return commands.CommandResult{Success: false}
 			}
 			// Other error - show and loop back
@@ -213,7 +201,7 @@ func startRecordingDirect(regionArg string, cfg *Config, notifCfg *config.Notifi
 func startRecording(ctx commands.LauncherContext, cfg *Config, notifCfg *config.NotificationConfig) error {
 	saveDir := utils.ExpandHomeDir(cfg.SaveDir)
 	if err := utils.EnsureDir(saveDir); err != nil {
-		return fmt.Errorf("failed to create save directory:    %w", err)
+		return fmt.Errorf("failed to create save directory: %w", err)
 	}
 
 	timestamp := utils.GetTimestamp()
@@ -231,13 +219,11 @@ func startRecording(ctx commands.LauncherContext, cfg *Config, notifCfg *config.
 
 	regionChoice, err := ctx.Show(regionOptions, "Recording Region")
 	if err != nil {
-		// ESC pressed - return "cancelled" to exit completely
-		return fmt.Errorf("cancelled")
+		return commands.ErrCancelled
 	}
 
 	if regionChoice == "← Back" {
-		// Back pressed - return "cancelled" to loop back
-		return fmt.Errorf("cancelled")
+		return commands.ErrCancelled
 	}
 
 	var cmd *exec.Cmd
@@ -263,10 +249,10 @@ func startRecording(ctx commands.LauncherContext, cfg *Config, notifCfg *config.
 		Pgid:    0,
 	}
 
-	pidFile := "/tmp/ql_videorecord. pid"
+	pidFile := "/tmp/ql_videorecord.pid"
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start recording:      %w", err)
+		return fmt.Errorf("failed to start recording: %w", err)
 	}
 
 	pidData := fmt.Sprintf("%d\n%s", cmd.Process.Pid, outputPath)
@@ -306,7 +292,7 @@ func buildWaylandCommand(region, outputPath string, cfg *Config, notifCfg *confi
 	case "Fullscreen":
 
 	case "Active Window":
-		windowGeometry, err := getWaylandActiveWindow()
+		windowGeometry, err := utils.WaylandActiveWindowGeometry()
 		if err != nil {
 			if cfg.ShowNotify {
 				utils.NotifyWithConfig(notifCfg, "Warning", "Active window not supported, using fullscreen")
@@ -351,7 +337,7 @@ func buildX11Command(region, outputPath string, cfg *Config) (*exec.Cmd, error) 
 	case "Active Window":
 		geometry, offset, err := getActiveWindowGeometry()
 		if err != nil {
-			return nil, fmt.Errorf("failed to get active window:      %w", err)
+			return nil, fmt.Errorf("failed to get active window: %w", err)
 		}
 		args = append(args, "-video_size", geometry)
 		args = append(args, "-i", fmt.Sprintf(":0.0+%s", offset))
@@ -399,26 +385,6 @@ func buildX11Command(region, outputPath string, cfg *Config) (*exec.Cmd, error) 
 	args = append(args, outputPath)
 
 	return exec.Command("ffmpeg", args...), nil
-}
-
-func getWaylandActiveWindow() (string, error) {
-	if utils.CommandExists("swaymsg") {
-		cmd := exec.Command("swaymsg", "-t", "get_tree")
-		output, err := cmd.Output()
-		if err == nil {
-			_ = output
-		}
-	}
-
-	if utils.CommandExists("hyprctl") {
-		cmd := exec.Command("hyprctl", "activewindow", "-j")
-		output, err := cmd.Output()
-		if err == nil {
-			_ = output
-		}
-	}
-
-	return "", fmt.Errorf("unable to get active window on Wayland")
 }
 
 func getActiveWindowGeometry() (string, string, error) {

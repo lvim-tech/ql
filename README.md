@@ -1,11 +1,12 @@
 # ql - Quick Launch
 
-A lightweight, modular command launcher for Linux with support for multiple menu systems (dmenu, rofi, fzf, bemenu, fuzzel).
+A lightweight, modular command launcher for Linux with a built-in terminal menu (Bubble Tea) and support for external menu systems (dmenu, rofi, fzf, bemenu, fuzzel).
 
 ## Features
 
 - **Modular Architecture** - Each command is a separate module that can be enabled/disabled
-- **Multiple Launchers** - Support for dmenu, rofi, fzf, bemenu, and fuzzel
+- **Built-in TUI** - a filterable Bubble Tea menu, no external launcher needed
+- **Multiple Launchers** - dmenu, rofi, fzf, bemenu, fuzzel, or `auto` (TUI in a terminal, the first installed Wayland/X11 menu otherwise)
 - **Highly Configurable** - TOML-based configuration with sensible defaults
 - **Grouped & Flat Menus** - Organize commands in groups or use flat list
 - **Partial Config Merge** - Override only what you need, keep defaults for the rest
@@ -26,7 +27,7 @@ sudo mv ql /usr/local/bin/
 
 - Go 1.21+ (for building only)
 
-**Runtime (at least one required):**
+**Runtime (all optional — the built-in `tui` launcher needs nothing):**
 
 - **dmenu** - Simple X11 menu
 - **rofi** - Feature-rich application launcher (X11/Wayland)

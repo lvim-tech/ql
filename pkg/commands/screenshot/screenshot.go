@@ -11,7 +11,6 @@ import (
 	"github.com/lvim-tech/ql/pkg/commands"
 	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/utils"
-	"github.com/mitchellh/mapstructure"
 )
 
 func init() {
@@ -23,20 +22,7 @@ func init() {
 }
 
 func Run(ctx commands.LauncherContext) commands.CommandResult {
-	cfgInterface := ctx.Config().GetScreenshotConfig()
-
-	var cfg Config
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		WeaklyTypedInput: true,
-		Result:           &cfg,
-	})
-	if err != nil {
-		cfg = DefaultConfig()
-	} else {
-		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
-			cfg = DefaultConfig()
-		}
-	}
+	cfg := commands.DecodeConfig(ctx, "screenshot", DefaultConfig())
 
 	if !cfg.Enabled {
 		return commands.CommandResult{
@@ -145,7 +131,7 @@ func executeDirectCommand(args []string, cfg *Config, notifCfg *config.Notificat
 	if err := utils.EnsureDir(saveDir); err != nil {
 		return commands.CommandResult{
 			Success: false,
-			Error:   fmt.Errorf("failed to create save directory:  %w", err),
+			Error:   fmt.Errorf("failed to create save directory: %w", err),
 		}
 	}
 
@@ -199,15 +185,22 @@ func buildWaylandCommand(mode, outputPath string) (*exec.Cmd, error) {
 		return exec.Command("grim", outputPath), nil
 
 	case "Active Window":
-		return exec.Command("sh", "-c",
-			fmt.Sprintf("grim -g \"$(swaymsg -t get_tree | jq -r '..  | select(.focused?) | .rect | \"\\(.x),\\(.y) \\(.width)x\\(.height)\"')\" %s", outputPath)), nil
+		// The geometry comes from compositor IPC (sway or Hyprland) in Go —
+		// the old swaymsg|jq shell pipeline broke with exit 1 on every
+		// compositor that is not sway. Where no IPC exists at all (mango,
+		// dwl, river) this degrades to fullscreen instead of failing: a
+		// whole-screen shot beats an error notification.
+		if geometry, err := utils.WaylandActiveWindowGeometry(); err == nil {
+			return exec.Command("grim", "-g", geometry, outputPath), nil
+		}
+		return exec.Command("grim", outputPath), nil
 
 	case "Select Region":
 		if !utils.CommandExists("slurp") {
 			return nil, fmt.Errorf("slurp is not installed (required for region selection)")
 		}
 		return exec.Command("sh", "-c",
-			fmt.Sprintf("grim -g \"$(slurp)\" %s", outputPath)), nil
+			fmt.Sprintf("grim -g \"$(slurp)\" %q", outputPath)), nil
 
 	default:
 		return nil, fmt.Errorf("unknown mode: %s", mode)
@@ -220,7 +213,11 @@ func buildX11Command(mode, outputPath string) (*exec.Cmd, error) {
 		case "Fullscreen":
 			return exec.Command("maim", outputPath), nil
 		case "Active Window":
-			return exec.Command("maim", "-i", "$(xdotool getactivewindow)", outputPath), nil
+			// exec.Command runs no shell, so the old literal
+			// "$(xdotool getactivewindow)" reached maim as text and this
+			// mode had never once worked. A shell has to do the expansion.
+			return exec.Command("sh", "-c",
+				fmt.Sprintf("maim -i \"$(xdotool getactivewindow)\" %q", outputPath)), nil
 		case "Select Region":
 			return exec.Command("maim", "-s", outputPath), nil
 		default:

@@ -2,6 +2,7 @@
 package power
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,7 +11,6 @@ import (
 	"github.com/lvim-tech/ql/pkg/commands"
 	"github.com/lvim-tech/ql/pkg/config"
 	"github.com/lvim-tech/ql/pkg/utils"
-	"github.com/mitchellh/mapstructure"
 )
 
 func init() {
@@ -22,20 +22,7 @@ func init() {
 }
 
 func Run(ctx commands.LauncherContext) commands.CommandResult {
-	cfgInterface := ctx.Config().GetPowerConfig()
-
-	var cfg Config
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		WeaklyTypedInput: true,
-		Result:           &cfg,
-	})
-	if err != nil {
-		cfg = DefaultConfig()
-	} else {
-		if decodeErr := decoder.Decode(cfgInterface); decodeErr != nil {
-			cfg = DefaultConfig()
-		}
-	}
+	cfg := commands.DecodeConfig(ctx, "power", DefaultConfig())
 
 	if !cfg.Enabled {
 		return commands.CommandResult{
@@ -70,7 +57,7 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 			return commands.CommandResult{Success: true}
 		}
 
-		if actionResult.Error != nil && actionResult.Error != commands.ErrBack {
+		if actionResult.Error != nil && !errors.Is(actionResult.Error, commands.ErrBack) {
 			return commands.CommandResult{Success: false}
 		}
 
@@ -82,27 +69,16 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 }
 
 func executeDirectCommand(action string, cfg *Config, notifCfg *config.NotificationConfig) commands.CommandResult {
-	var err error
-
-	switch strings.ToLower(action) {
-	case "logout":
-		err = executeLogout(cfg)
-	case "suspend":
-		err = executeSuspend(cfg)
-	case "hibernate":
-		err = executeHibernate(cfg)
-	case "reboot":
-		err = executeReboot(cfg)
-	case "shutdown":
-		err = executeShutdown(cfg)
-	default:
+	label := strings.ToUpper(action[:1]) + strings.ToLower(action[1:])
+	spec, ok := powerCommands(cfg)[label]
+	if !ok {
 		return commands.CommandResult{
 			Success: false,
 			Error:   fmt.Errorf("unknown power action: %s (available: logout, suspend, hibernate, reboot, shutdown)", action),
 		}
 	}
 
-	if err != nil {
+	if err := runPowerCommand(label, spec.Command); err != nil {
 		utils.ShowErrorNotificationWithConfig(notifCfg, "Power Error", err.Error())
 		return commands.CommandResult{Success: false, Error: err}
 	}
@@ -136,129 +112,52 @@ func showPowerMainMenu(ctx commands.LauncherContext, cfg *Config) (string, error
 	return ctx.Show(options, "Power")
 }
 
+// powerCommands maps a menu label to its confirm flag and configured
+// command. One table, one arm below: the five actions differed only in
+// these two values, and five copies of the confirm dance were 125 lines of
+// the same 25.
+func powerCommands(cfg *Config) map[string]struct {
+	Confirm bool
+	Command string
+} {
+	return map[string]struct {
+		Confirm bool
+		Command string
+	}{
+		"Logout":    {cfg.ConfirmLogout, cfg.LogoutCommand},
+		"Suspend":   {cfg.ConfirmSuspend, cfg.SuspendCommand},
+		"Hibernate": {cfg.ConfirmHibernate, cfg.HibernateCommand},
+		"Reboot":    {cfg.ConfirmReboot, cfg.RebootCommand},
+		"Shutdown":  {cfg.ConfirmShutdown, cfg.ShutdownCommand},
+	}
+}
+
 func executePowerAction(ctx commands.LauncherContext, cfg *Config, action string) commands.CommandResult {
-	switch action {
-	case "Logout":
-		if cfg.ConfirmLogout {
-			choice, err := confirmAction(ctx, "Logout")
-			if err != nil {
-				return commands.CommandResult{Success: false, Error: fmt.Errorf("ESC")}
-			}
-			switch choice {
-			case "← Back":
-				return commands.CommandResult{Success: false, Error: commands.ErrBack}
-			case "Yes":
-				if err := executeLogout(cfg); err != nil {
-					return commands.CommandResult{Success: false, Error: err}
-				}
-				return commands.CommandResult{Success: true}
-			case "No":
-				return commands.CommandResult{Success: true}
-			}
-		}
-		if err := executeLogout(cfg); err != nil {
-			return commands.CommandResult{Success: false, Error: err}
-		}
-		return commands.CommandResult{Success: true}
-
-	case "Suspend":
-		if cfg.ConfirmSuspend {
-			choice, err := confirmAction(ctx, "Suspend")
-			if err != nil {
-				return commands.CommandResult{Success: false, Error: fmt.Errorf("ESC")}
-			}
-			switch choice {
-			case "← Back":
-				return commands.CommandResult{Success: false, Error: commands.ErrBack}
-			case "Yes":
-				if err := executeSuspend(cfg); err != nil {
-					return commands.CommandResult{Success: false, Error: err}
-				}
-				return commands.CommandResult{Success: true}
-			case "No":
-				return commands.CommandResult{Success: true}
-			}
-		}
-		if err := executeSuspend(cfg); err != nil {
-			return commands.CommandResult{Success: false, Error: err}
-		}
-		return commands.CommandResult{Success: true}
-
-	case "Hibernate":
-		if cfg.ConfirmHibernate {
-			choice, err := confirmAction(ctx, "Hibernate")
-			if err != nil {
-				return commands.CommandResult{Success: false, Error: fmt.Errorf("ESC")}
-			}
-			switch choice {
-			case "← Back":
-				return commands.CommandResult{Success: false, Error: commands.ErrBack}
-			case "Yes":
-				if err := executeHibernate(cfg); err != nil {
-					return commands.CommandResult{Success: false, Error: err}
-				}
-				return commands.CommandResult{Success: true}
-			case "No":
-				return commands.CommandResult{Success: true}
-			}
-		}
-		if err := executeHibernate(cfg); err != nil {
-			return commands.CommandResult{Success: false, Error: err}
-		}
-		return commands.CommandResult{Success: true}
-
-	case "Reboot":
-		if cfg.ConfirmReboot {
-			choice, err := confirmAction(ctx, "Reboot")
-			if err != nil {
-				return commands.CommandResult{Success: false, Error: fmt.Errorf("ESC")}
-			}
-			switch choice {
-			case "← Back":
-				return commands.CommandResult{Success: false, Error: commands.ErrBack}
-			case "Yes":
-				if err := executeReboot(cfg); err != nil {
-					return commands.CommandResult{Success: false, Error: err}
-				}
-				return commands.CommandResult{Success: true}
-			case "No":
-				return commands.CommandResult{Success: true}
-			}
-		}
-		if err := executeReboot(cfg); err != nil {
-			return commands.CommandResult{Success: false, Error: err}
-		}
-		return commands.CommandResult{Success: true}
-
-	case "Shutdown":
-		if cfg.ConfirmShutdown {
-			choice, err := confirmAction(ctx, "Shutdown")
-			if err != nil {
-				return commands.CommandResult{Success: false, Error: fmt.Errorf("ESC")}
-			}
-			switch choice {
-			case "← Back":
-				return commands.CommandResult{Success: false, Error: commands.ErrBack}
-			case "Yes":
-				if err := executeShutdown(cfg); err != nil {
-					return commands.CommandResult{Success: false, Error: err}
-				}
-				return commands.CommandResult{Success: true}
-			case "No":
-				return commands.CommandResult{Success: true}
-			}
-		}
-		if err := executeShutdown(cfg); err != nil {
-			return commands.CommandResult{Success: false, Error: err}
-		}
-		return commands.CommandResult{Success: true}
-
-	default:
+	spec, ok := powerCommands(cfg)[action]
+	if !ok {
 		return commands.CommandResult{
 			Success: false,
 			Error:   fmt.Errorf("unknown action: %s", action),
 		}
 	}
+
+	if spec.Confirm {
+		choice, err := confirmAction(ctx, action)
+		if err != nil {
+			return commands.CommandResult{Success: false, Error: commands.ErrCancelled}
+		}
+		switch choice {
+		case "← Back":
+			return commands.CommandResult{Success: false, Error: commands.ErrBack}
+		case "No":
+			return commands.CommandResult{Success: true}
+		}
+	}
+
+	if err := runPowerCommand(action, spec.Command); err != nil {
+		return commands.CommandResult{Success: false, Error: err}
+	}
+	return commands.CommandResult{Success: true}
 }
 
 func confirmAction(ctx commands.LauncherContext, action string) (string, error) {
@@ -270,47 +169,13 @@ func confirmAction(ctx commands.LauncherContext, action string) (string, error) 
 	return choice, nil
 }
 
-func executeLogout(cfg *Config) error {
-	cmd := exec.Command("sh", "-c", os.ExpandEnv(cfg.LogoutCommand))
+// runPowerCommand runs the configured command through sh — that is the
+// point: users configure arbitrary shell for these actions.
+func runPowerCommand(action, command string) error {
+	cmd := exec.Command("sh", "-c", os.ExpandEnv(command))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("logout failed: %s", strings.TrimSpace(string(output)))
-	}
-	return nil
-}
-
-func executeSuspend(cfg *Config) error {
-	cmd := exec.Command("sh", "-c", os.ExpandEnv(cfg.SuspendCommand))
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("suspend failed: %s", strings.TrimSpace(string(output)))
-	}
-	return nil
-}
-
-func executeHibernate(cfg *Config) error {
-	cmd := exec.Command("sh", "-c", os.ExpandEnv(cfg.HibernateCommand))
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("hibernate failed: %s", strings.TrimSpace(string(output)))
-	}
-	return nil
-}
-
-func executeReboot(cfg *Config) error {
-	cmd := exec.Command("sh", "-c", os.ExpandEnv(cfg.RebootCommand))
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("reboot failed: %s", strings.TrimSpace(string(output)))
-	}
-	return nil
-}
-
-func executeShutdown(cfg *Config) error {
-	cmd := exec.Command("sh", "-c", os.ExpandEnv(cfg.ShutdownCommand))
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("shutdown failed: %s", strings.TrimSpace(string(output)))
+		return fmt.Errorf("%s failed: %s", strings.ToLower(action), strings.TrimSpace(string(output)))
 	}
 	return nil
 }
