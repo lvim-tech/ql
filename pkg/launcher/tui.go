@@ -103,6 +103,15 @@ func newTUIList(options []string, prompt string) list.Model {
 	lst.Styles.Title = tuiTitle
 	lst.SetShowStatusBar(false)
 	lst.SetShowHelp(true)
+	// The filter's prompt and cursor take the interface's own colours. bubbles reads
+	// Styles.Filter* exactly once, inside list.New(), so setting the struct afterwards reaches
+	// nothing — the input keeps the library's defaults: a neon yellow prompt (#ECFD65) and a
+	// pink cursor (#EE6FF8), neither of which belongs to any palette here.
+	lst.Styles.FilterPrompt = tuiSelected
+	lst.Styles.FilterCursor = tuiSelected
+	lst.FilterInput.PromptStyle = tuiSelected
+	lst.FilterInput.Cursor.Style = tuiSelected
+	lst.FilterInput.PlaceholderStyle = tuiDim
 	lst.Paginator.ActiveDot = tuiSelected.Render("● ")
 	lst.Paginator.InactiveDot = tuiDim.Render("○ ")
 	return lst
