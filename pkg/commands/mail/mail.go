@@ -99,7 +99,8 @@ func inTerminal(command string) error {
 	if terminal == "" {
 		return fmt.Errorf("no terminal emulator found")
 	}
-	cmd := exec.Command(terminal, "-e", "sh", "-c", command)
+	args := append(utils.TerminalArgs(terminal), "-e", "sh", "-c", command)
+	cmd := exec.Command(terminal, args...)
 	cmd.Env = os.Environ()
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to open terminal: %w", err)
