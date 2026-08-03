@@ -223,7 +223,71 @@ func IsTerminal() bool {
 	return true
 }
 
-// DetectTerminal detects available terminal emulator
+// extraBinDirs are the directories searched after PATH.
+//
+// A compositor keybinding, a waybar module, a .desktop entry — none of them get the interactive
+// shell's PATH, and this machine deliberately keeps clipack's bin out of the session's (see
+// ~/.zprofile). So a program installed by clipack is invisible to anything launched that way, and
+// the failure is silent: DetectTerminal simply moved down its list and returned the next terminal
+// that happened to be a distribution package. Mail opened in the wrong emulator and nothing said
+// why.
+//
+// The base path is read from clipack's own config rather than assumed, because that is where it is
+// configured; ~/clipack is only the fallback.
+func extraBinDirs() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	base := filepath.Join(home, "clipack")
+	if data, err := os.ReadFile(filepath.Join(home, ".config", "clipack", "config.yaml")); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if _, value, found := strings.Cut(strings.TrimSpace(line), "base:"); found {
+				if v := strings.TrimSpace(value); v != "" {
+					base = v
+				}
+				break
+			}
+		}
+	}
+	return []string{filepath.Join(base, "bin")}
+}
+
+// Look resolves a command to a path, searching PATH first and then the directories PATH does not
+// carry. Returns "" when it is nowhere.
+//
+// The ABSOLUTE path is what callers want: finding a program and then exec'ing it by bare name
+// would fail all over again in the environment that could not find it in the first place.
+func Look(cmd string) string {
+	if p, err := exec.LookPath(cmd); err == nil {
+		return p
+	}
+	for _, dir := range extraBinDirs() {
+		candidate := filepath.Join(dir, cmd)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return candidate
+		}
+	}
+	return ""
+}
+
+// TerminalArgs are the options a terminal needs before `-e`, given what is about to run in it.
+//
+// kitty gets `term=kitty-direct`. Its default TERM is xterm-kitty, whose terminfo declares 256
+// colours; a program that emits `#rrggbb` — neomutt's colour commands, which this desktop's config
+// uses throughout — then either prints them as errors or falls back to an approximation. The
+// direct-colour entry is the same terminal with 24-bit colour declared, and it ships with kitty.
+//
+// Setting TERM in the environment does not work: kitty sets its child's TERM from its own `term`
+// option, so the parent's value is overwritten. The override has to be passed to kitty itself.
+func TerminalArgs(terminal string) []string {
+	if filepath.Base(terminal) == "kitty" {
+		return []string{"-o", "term=kitty-direct"}
+	}
+	return nil
+}
+
+// DetectTerminal returns the path of the first terminal emulator it finds.
 func DetectTerminal() string {
 	terminals := []string{
 		"kitty",
@@ -236,8 +300,8 @@ func DetectTerminal() string {
 	}
 
 	for _, term := range terminals {
-		if CommandExists(term) {
-			return term
+		if p := Look(term); p != "" {
+			return p
 		}
 	}
 
