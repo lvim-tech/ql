@@ -51,7 +51,7 @@ func (e *external) Show(options []string, prompt string) (string, error) {
 	// array once anything holds a slice with spare capacity.
 	args := slices.Concat(launcherCfg.Args, e.promptArgs(prompt))
 
-	cmd := exec.Command(e.name, args...)
+	cmd := exec.Command(binaryFor(e.cfg, e.name), args...)
 	if e.wantStderr {
 		cmd.Stderr = os.Stderr
 	}

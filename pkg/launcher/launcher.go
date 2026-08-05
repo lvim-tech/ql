@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"golang.org/x/term"
 
 	"github.com/lvim-tech/ql/pkg/config"
+	"github.com/lvim-tech/ql/pkg/utils"
 )
 
 // Launcher interface defines launcher behavior
@@ -56,7 +58,7 @@ func (b *baseLauncher) SetArgs(args []string) {
 // arm quietly ran rofi on machines that did not have it.
 func New(name string, cfg *config.Config) (Launcher, error) {
 	if name == "" || name == "auto" {
-		name = pickAuto()
+		name = pickAuto(cfg)
 	}
 	if name == "tui" {
 		return newTUI(cfg), nil
@@ -72,7 +74,7 @@ func New(name string, cfg *config.Config) (Launcher, error) {
 // Wayland — it works on either and is what most configurations are themed
 // for; the Wayland-native menus are the fallback when it is absent, not a
 // silent replacement for it. Override with default_launcher.
-func pickAuto() string {
+func pickAuto(cfg *config.Config) string {
 	if term.IsTerminal(int(os.Stdout.Fd())) {
 		return "tui"
 	}
@@ -81,9 +83,38 @@ func pickAuto() string {
 		order = []string{"rofi", "fuzzel", "bemenu", "dmenu", "fzf"}
 	}
 	for _, name := range order {
-		if _, err := exec.LookPath(name); err == nil {
+		if available(binaryFor(cfg, name)) {
 			return name
 		}
 	}
 	return "rofi"
+}
+
+// binaryFor is the executable a launcher runs as: whatever `command` its config
+// names, or the launcher's own name when it names nothing.
+//
+// Auto-detection has to ask the same question as launching does. Without this,
+// a rofi reachable only through a configured path was still passed over by
+// pickAuto — which then chose a menu the user had configured against.
+func binaryFor(cfg *config.Config, name string) string {
+	if cfg != nil {
+		if cmd := strings.TrimSpace(cfg.GetLauncherConfig(name).Command); cmd != "" {
+			return utils.ExpandHomeDir(cmd)
+		}
+	}
+	return name
+}
+
+// available reports whether a launcher binary can actually be run.
+//
+// A name goes through PATH; a path is checked where it points. LookPath would
+// answer for a path too, but only by searching PATH for something containing a
+// slash — which finds nothing and reports "not found" for a file plainly there.
+func available(bin string) bool {
+	if strings.ContainsRune(bin, os.PathSeparator) {
+		fi, err := os.Stat(bin)
+		return err == nil && !fi.IsDir() && fi.Mode().Perm()&0o111 != 0
+	}
+	_, err := exec.LookPath(bin)
+	return err == nil
 }

@@ -40,7 +40,16 @@ type ModuleGroup struct {
 
 // LauncherConfig represents launcher-specific configuration
 type LauncherConfig struct {
-	Args []string `toml:"args"`
+	// Command is the executable to run, when it is not simply the launcher's
+	// name on PATH. A menu installed outside the session's PATH cannot be named
+	// any other way: `--launcher` takes a name, and a process started from a
+	// compositor keybind carries only the login PATH — which on the machine this
+	// was written for is ~/.local/bin, ~/bin, /usr/local/bin, /usr/bin, /bin.
+	// A rofi built into ~/clipack/bin is invisible to every one of them.
+	//
+	// A leading ~ is expanded, because a config file is where people write one.
+	Command string   `toml:"command,omitempty"`
+	Args    []string `toml:"args"`
 }
 
 // NotificationConfig controls notification behavior

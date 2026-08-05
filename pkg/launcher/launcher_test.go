@@ -87,7 +87,51 @@ func TestAutoPrefersRofiOnWayland(t *testing.T) {
 	t.Setenv("PATH", dir)
 	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
 
-	if got := pickAuto(); got != "rofi" && got != "tui" {
+	if got := pickAuto(nil); got != "rofi" && got != "tui" {
 		t.Errorf("auto picked %q, want rofi (tui is fine only when the test runs on a TTY)", got)
+	}
+}
+
+// A launcher installed outside the session's PATH is reachable only by path,
+// and BOTH the run and the auto-detection have to honour it. The detection is
+// the half that was missing: pickAuto asked PATH, found nothing, and chose a
+// menu the user had configured against.
+func TestConfiguredCommandIsFoundAndPreferred(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "elsewhere")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rofi := filepath.Join(outside, "rofi")
+	if err := os.WriteFile(rofi, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A PATH with a fuzzel in it and no rofi: exactly the case that misfired.
+	onpath := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(onpath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(onpath, "fuzzel"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", onpath)
+	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
+
+	cfg := &config.Config{Launchers: map[string]config.LauncherConfig{
+		"rofi": {Command: rofi},
+	}}
+
+	if got := binaryFor(cfg, "rofi"); got != rofi {
+		t.Errorf("binaryFor = %q, want the configured path %q", got, rofi)
+	}
+	if !available(rofi) {
+		t.Errorf("available(%q) = false for a file that is there and executable", rofi)
+	}
+	if got := pickAuto(cfg); got != "rofi" && got != "tui" {
+		t.Errorf("auto picked %q; the configured rofi should win over the fuzzel on PATH", got)
+	}
+	// Without the config it must still fall back to what PATH actually holds.
+	if got := pickAuto(nil); got != "fuzzel" && got != "tui" {
+		t.Errorf("auto without config picked %q, want fuzzel — the only one on PATH", got)
 	}
 }
