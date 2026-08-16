@@ -156,14 +156,27 @@ func executeDirectCommand(ctx commands.LauncherContext, args []string, cfg *Conf
 	return commands.CommandResult{Success: true}
 }
 
-func connectToNetworkDirect(ssid, password string, cfg *Config, notifCfg *config.NotificationConfig) error {
-	var cmd *exec.Cmd
-
-	if password != "" {
-		cmd = exec.Command("nmcli", "dev", "wifi", "connect", ssid, "password", password)
-	} else {
-		cmd = exec.Command("nmcli", "dev", "wifi", "connect", ssid)
+// connectCmd builds the nmcli invocation for joining ssid.
+//
+// The passphrase is NEVER passed as an argument. `nmcli ... password <psk>`
+// puts the secret in argv, and /proc/<pid>/cmdline is world-readable: for as
+// long as nmcli runs, every user on the machine can read the WPA key out of
+// `ps`. Instead nmcli is asked to act as the secret agent (--ask) and the
+// passphrase is written to its stdin, which is a private pipe. This matches
+// the discipline the pass module already keeps — no secret crosses a command
+// line.
+func connectCmd(ssid, password string) *exec.Cmd {
+	if password == "" {
+		return exec.Command("nmcli", "dev", "wifi", "connect", ssid)
 	}
+
+	cmd := exec.Command("nmcli", "--ask", "dev", "wifi", "connect", ssid)
+	cmd.Stdin = strings.NewReader(password + "\n")
+	return cmd
+}
+
+func connectToNetworkDirect(ssid, password string, cfg *Config, notifCfg *config.NotificationConfig) error {
+	cmd := connectCmd(ssid, password)
 
 	output, err := cmd.CombinedOutput()
 
@@ -176,7 +189,7 @@ func connectToNetworkDirect(ssid, password string, cfg *Config, notifCfg *config
 				return fmt.Errorf("password required but not provided")
 			}
 
-			cmd = exec.Command("nmcli", "dev", "wifi", "connect", ssid, "password", promptedPassword)
+			cmd = connectCmd(ssid, promptedPassword)
 			output, err = cmd.CombinedOutput()
 			if err != nil {
 				return fmt.Errorf("failed to connect: %s", strings.TrimSpace(string(output)))
