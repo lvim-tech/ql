@@ -105,7 +105,6 @@ shutdown_command = "systemctl poweroff"
 # KILL
 [commands.kill]
 enabled = true
-show_user_processes = true
 show_all_processes = false
 exclude_processes = ["systemd", "init", "kthreadd"]
 confirm_kill = true
@@ -170,8 +169,6 @@ format = "firefox_sqlite"
 # NETSTAT
 [commands.netstat]
 enabled = true
-show_notify = true
-update_interval = 1
 prefer_vnstat = true
 # NETSTAT
 
