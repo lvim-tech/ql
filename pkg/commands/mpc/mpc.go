@@ -141,6 +141,12 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 			if errors.Is(actionErr, commands.ErrCancelled) {
 				return commands.CommandResult{Success: false}
 			}
+			// "← Back" out of a submenu is navigation, not failure. It used
+			// to be a bare fmt.Errorf("back"), which fell through to the arm
+			// below and flashed "MPC Error: back" on every single use.
+			if errors.Is(actionErr, commands.ErrBack) {
+				continue
+			}
 			// Other error - show and loop back
 			utils.ShowErrorNotificationWithConfig(&notifCfg, "MPC Error", actionErr.Error())
 			continue
@@ -365,8 +371,8 @@ func selectPlaylist(ctx commands.LauncherContext, cfg *Config, notifCfg *config.
 	}
 
 	if choice == "← Back" {
-		// Back pressed - return "cancelled" to loop back
-		return fmt.Errorf("back")
+		// Back pressed - loop back to the main menu
+		return commands.ErrBack
 	}
 
 	return loadPlaylistDirect(choice, cfg, notifCfg)
@@ -401,8 +407,8 @@ func selectSong(ctx commands.LauncherContext, notifCfg *config.NotificationConfi
 	}
 
 	if choice == "← Back" {
-		// Back pressed - return "cancelled" to loop back
-		return fmt.Errorf("back")
+		// Back pressed - loop back to the main menu
+		return commands.ErrBack
 	}
 
 	var position int
