@@ -37,7 +37,7 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 	// Check for direct command
 	args := ctx.Args()
 	if len(args) > 0 {
-		return executeDirectCommand(args, &notifCfg)
+		return executeDirectCommand(args, &cfg, &notifCfg)
 	}
 
 	for {
@@ -90,7 +90,7 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 	}
 }
 
-func executeDirectCommand(args []string, notifCfg *config.NotificationConfig) commands.CommandResult {
+func executeDirectCommand(args []string, cfg *Config, notifCfg *config.NotificationConfig) commands.CommandResult {
 	action := strings.ToLower(args[0])
 
 	var err error
@@ -101,13 +101,13 @@ func executeDirectCommand(args []string, notifCfg *config.NotificationConfig) co
 		if len(args) > 1 {
 			period = args[1]
 		}
-		err = showTrafficStats(period, "", notifCfg)
+		err = showTrafficStats(period, "", cfg, notifCfg)
 	case "connections", "conn":
 		err = showConnections(notifCfg)
 	case "info":
 		err = showInterfaceInfo(notifCfg)
 	default:
-		err = showTrafficStats(action, "", notifCfg)
+		err = showTrafficStats(action, "", cfg, notifCfg)
 	}
 
 	if err != nil {
@@ -116,7 +116,7 @@ func executeDirectCommand(args []string, notifCfg *config.NotificationConfig) co
 	return commands.CommandResult{Success: true}
 }
 
-func showTrafficMenu(ctx commands.LauncherContext, _ *Config, notifCfg *config.NotificationConfig) error {
+func showTrafficMenu(ctx commands.LauncherContext, cfg *Config, notifCfg *config.NotificationConfig) error {
 	options := []string{
 		"← Back",
 		"Today",
@@ -152,11 +152,11 @@ func showTrafficMenu(ctx commands.LauncherContext, _ *Config, notifCfg *config.N
 		period = "30min"
 	}
 
-	return showTrafficStats(period, "", notifCfg)
+	return showTrafficStats(period, "", cfg, notifCfg)
 }
 
-func showTrafficStats(period string, interfaceName string, _ *config.NotificationConfig) error {
-	stats, err := GetNetworkStats(period, interfaceName)
+func showTrafficStats(period string, interfaceName string, cfg *Config, _ *config.NotificationConfig) error {
+	stats, err := GetNetworkStats(period, interfaceName, cfg.PreferVnstat)
 	if err != nil {
 		return err
 	}

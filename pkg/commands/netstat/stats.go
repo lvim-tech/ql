@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/lvim-tech/ql/pkg/utils"
 )
@@ -39,15 +40,18 @@ type NetworkStats struct {
 	EndTime    time.Time
 }
 
-// GetNetworkStats retrieves network statistics for the given period
-func GetNetworkStats(period string, interfaceName string) (*NetworkStats, error) {
+// GetNetworkStats retrieves network statistics for the given period.
+//
+// preferVnstat is the prefer_vnstat setting. It used to be decoded and then
+// ignored: vnstat was always tried first, so setting it to false did nothing.
+func GetNetworkStats(period string, interfaceName string, preferVnstat bool) (*NetworkStats, error) {
 	start, end, err := parsePeriod(period)
 	if err != nil {
 		return nil, err
 	}
 
-	// Try vnstat first if available and has data
-	if utils.CommandExists("vnstat") && vnstatHasData() {
+	// Try vnstat first if the user prefers it and it has data
+	if preferVnstat && utils.CommandExists("vnstat") && vnstatHasData() {
 		return getVnstatStats(start, end, interfaceName)
 	}
 
@@ -87,25 +91,25 @@ func parsePeriod(arg string) (time.Time, time.Time, error) {
 
 	// Time-based periods:   "30min", "2. 5hours", "3days"
 	if matched, _ := regexp.MatchString(`^\d+(\.\d+)?(min|minutes?)$`, arg); matched {
-		minutes := parseTimeValue(arg, "min")
+		minutes := parseTimeValue(arg)
 		start := now.Add(-time.Duration(minutes) * time.Minute)
 		return start, now, nil
 	}
 
 	if matched, _ := regexp.MatchString(`^\d+(\.\d+)?(hour|hours?)$`, arg); matched {
-		hours := parseTimeValue(arg, "hour")
+		hours := parseTimeValue(arg)
 		start := now.Add(-time.Duration(hours*60) * time.Minute)
 		return start, now, nil
 	}
 
 	if matched, _ := regexp.MatchString(`^\d+(\.\d+)?(day|days?)$`, arg); matched {
-		days := parseTimeValue(arg, "day")
+		days := parseTimeValue(arg)
 		start := now.AddDate(0, 0, -int(days))
 		return start, now, nil
 	}
 
 	if matched, _ := regexp.MatchString(`^\d+(\.\d+)?(week|weeks?)$`, arg); matched {
-		weeks := parseTimeValue(arg, "week")
+		weeks := parseTimeValue(arg)
 		start := now.AddDate(0, 0, -int(weeks*7))
 		return start, now, nil
 	}
@@ -144,10 +148,14 @@ func parsePeriod(arg string) (time.Time, time.Time, error) {
 	return time.Time{}, time.Time{}, fmt.Errorf("unknown period format: %s", arg)
 }
 
-func parseTimeValue(s, unit string) float64 {
-	// Remove unit suffixes
-	s = strings.TrimSuffix(s, "s")
-	s = strings.TrimSuffix(s, unit)
+// parseTimeValue reads the number off the front of a period like "30min".
+//
+// The whole trailing unit word is stripped rather than a fixed suffix. The
+// accepted spellings include "30minutes", and trimming "s" and then "min" left
+// "30minute" behind — ParseFloat rejected it and the value silently became 0,
+// so `ql netstat 30minutes` reported an empty window instead of half an hour.
+func parseTimeValue(s string) float64 {
+	s = strings.TrimRightFunc(s, unicode.IsLetter)
 	val, _ := strconv.ParseFloat(s, 64)
 	return val
 }
