@@ -161,13 +161,13 @@ func startRecording(cfg *Config, notifCfg *config.NotificationConfig) error {
 
 	pidFile := getPIDFile()
 	pidBytes := []byte(strconv.Itoa(cmd.Process.Pid))
-	if err := os.WriteFile(pidFile, pidBytes, 0644); err != nil {
+	if err := os.WriteFile(pidFile, pidBytes, 0600); err != nil {
 		cmd.Process.Kill()
 		return fmt.Errorf("failed to save PID: %w", err)
 	}
 
 	pathFile := getOutputPathFile()
-	if err := os.WriteFile(pathFile, []byte(outputPath), 0644); err != nil {
+	if err := os.WriteFile(pathFile, []byte(outputPath), 0600); err != nil {
 		cmd.Process.Kill()
 		os.Remove(pidFile)
 		return fmt.Errorf("failed to save output path: %w", err)
@@ -272,10 +272,14 @@ func isRecording() bool {
 	return true
 }
 
+// The recorder's state lives in the per-user runtime directory, not at a fixed
+// name in /tmp. A world-writable directory let any other user pre-create these
+// paths — as a symlink, to make ql overwrite a file for them, or with a PID of
+// their choosing, which stopRecording would then read back and SIGINT.
 func getPIDFile() string {
-	return "/tmp/ql_audiorecord.pid"
+	return utils.RuntimeStatePath("audiorecord.pid")
 }
 
 func getOutputPathFile() string {
-	return "/tmp/ql_audiorecord_output.txt"
+	return utils.RuntimeStatePath("audiorecord_output.txt")
 }

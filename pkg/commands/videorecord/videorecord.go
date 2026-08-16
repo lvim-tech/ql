@@ -177,14 +177,14 @@ func startRecordingDirect(regionArg string, cfg *Config, notifCfg *config.Notifi
 		Pgid:    0,
 	}
 
-	pidFile := "/tmp/ql_videorecord.pid"
+	pidFile := getPIDFile()
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start recording: %w", err)
 	}
 
 	pidData := fmt.Sprintf("%d\n%s", cmd.Process.Pid, outputPath)
-	if err := os.WriteFile(pidFile, []byte(pidData), 0644); err != nil {
+	if err := os.WriteFile(pidFile, []byte(pidData), 0600); err != nil {
 		cmd.Process.Kill()
 		return fmt.Errorf("failed to write PID file: %w", err)
 	}
@@ -249,14 +249,14 @@ func startRecording(ctx commands.LauncherContext, cfg *Config, notifCfg *config.
 		Pgid:    0,
 	}
 
-	pidFile := "/tmp/ql_videorecord.pid"
+	pidFile := getPIDFile()
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start recording: %w", err)
 	}
 
 	pidData := fmt.Sprintf("%d\n%s", cmd.Process.Pid, outputPath)
-	if err := os.WriteFile(pidFile, []byte(pidData), 0644); err != nil {
+	if err := os.WriteFile(pidFile, []byte(pidData), 0600); err != nil {
 		cmd.Process.Kill()
 		return fmt.Errorf("failed to write PID file: %w", err)
 	}
@@ -428,7 +428,7 @@ func getActiveWindowGeometry() (string, string, error) {
 }
 
 func stopRecording(cfg *Config, notifCfg *config.NotificationConfig) error {
-	pidFile := "/tmp/ql_videorecord.pid"
+	pidFile := getPIDFile()
 
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
@@ -514,4 +514,12 @@ func detectAudioDevice() string {
 	}
 
 	return ""
+}
+
+// The recorder's state lives in the per-user runtime directory, not at a fixed
+// name in /tmp. A world-writable directory let any other user pre-create this
+// path — as a symlink, to make ql overwrite a file for them, or with a PID of
+// their choosing, which stopRecording would then read back and SIGINT.
+func getPIDFile() string {
+	return utils.RuntimeStatePath("videorecord.pid")
 }
