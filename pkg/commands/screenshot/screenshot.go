@@ -199,8 +199,21 @@ func buildWaylandCommand(mode, outputPath string) (*exec.Cmd, error) {
 		if !utils.CommandExists("slurp") {
 			return nil, fmt.Errorf("slurp is not installed (required for region selection)")
 		}
-		return exec.Command("sh", "-c",
-			fmt.Sprintf("grim -g \"$(slurp)\" %q", outputPath)), nil
+		// slurp runs here rather than inside `sh -c "grim -g \"$(slurp)\""`.
+		// That form interpolated the output path with %q, which is GO
+		// quoting, not shell quoting: it leaves $ and backticks live inside
+		// the double quotes it produces, so a save_dir or file_prefix
+		// containing $(...) was command-substituted. With no shell in the
+		// picture there is nothing left to substitute.
+		out, err := exec.Command("slurp").Output()
+		if err != nil {
+			return nil, fmt.Errorf("region selection cancelled")
+		}
+		geometry := strings.TrimSpace(string(out))
+		if geometry == "" {
+			return nil, fmt.Errorf("region selection cancelled")
+		}
+		return exec.Command("grim", "-g", geometry, outputPath), nil
 
 	default:
 		return nil, fmt.Errorf("unknown mode: %s", mode)
@@ -213,11 +226,25 @@ func buildX11Command(mode, outputPath string) (*exec.Cmd, error) {
 		case "Fullscreen":
 			return exec.Command("maim", outputPath), nil
 		case "Active Window":
-			// exec.Command runs no shell, so the old literal
-			// "$(xdotool getactivewindow)" reached maim as text and this
-			// mode had never once worked. A shell has to do the expansion.
-			return exec.Command("sh", "-c",
-				fmt.Sprintf("maim -i \"$(xdotool getactivewindow)\" %q", outputPath)), nil
+			// The window id is resolved here instead of by a shell. The
+			// original code passed the literal "$(xdotool getactivewindow)"
+			// to exec.Command, which runs no shell, so maim received it as
+			// text and the mode had never once worked; routing it through
+			// `sh -c` fixed that but interpolated the output path with %q,
+			// which does not stop the shell expanding $ or backticks in a
+			// configured path. Doing the lookup in Go fixes both.
+			if !utils.CommandExists("xdotool") {
+				return nil, fmt.Errorf("xdotool is not installed (required for active window capture)")
+			}
+			out, err := exec.Command("xdotool", "getactivewindow").Output()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get active window: %w", err)
+			}
+			windowID := strings.TrimSpace(string(out))
+			if windowID == "" {
+				return nil, fmt.Errorf("no active window found")
+			}
+			return exec.Command("maim", "-i", windowID, outputPath), nil
 		case "Select Region":
 			return exec.Command("maim", "-s", outputPath), nil
 		default:
