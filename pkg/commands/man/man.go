@@ -108,7 +108,7 @@ func getAllManpages(cfg *Config) ([]string, error) {
 			continue
 		}
 
-		formatted := formatManpage(line)
+		formatted := formatManpage(line, cfg.ShowDescriptions)
 		if formatted != "" {
 			manpages = append(manpages, formatted)
 		}
@@ -121,7 +121,10 @@ func getAllManpages(cfg *Config) ([]string, error) {
 	return manpages, nil
 }
 
-func formatManpage(line string) string {
+// formatManpage renders one `man -k` line. withDescription reflects the
+// show_descriptions setting, which used to be decoded and then ignored — the
+// description was always appended regardless of what the user configured.
+func formatManpage(line string, withDescription bool) string {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return ""
@@ -136,12 +139,30 @@ func formatManpage(line string) string {
 	section := parts[1]
 	section = strings.Trim(section, "()")
 
-	if len(parts) > 2 {
+	if withDescription && len(parts) > 2 {
 		description := strings.Join(parts[3:], " ")
 		return fmt.Sprintf("%s (%s) - %s", name, section, description)
 	}
 
 	return fmt.Sprintf("%s (%s)", name, section)
+}
+
+// manScript builds the `sh -c` line that pipes a page into the pager.
+//
+// The page name comes from `man -k` output — third-party packages get a say in
+// it — so it is shell-quoted, not interpolated raw. It has to be SHELL quoting:
+// %q produces a double-quoted Go string, and the shell still expands $ and
+// backticks inside double quotes, so a page whose NAME field carried $(...)
+// would have been executed. The pager stays unquoted on purpose: it is the
+// user's own config and may legitimately carry flags ("nvimpager -p").
+func manScript(manName, pager string) string {
+	// nvimpager needs -p to be forced into pager mode.
+	pagerCmd := pager
+	if strings.Contains(pager, "nvimpager") {
+		pagerCmd = pager + " -p"
+	}
+
+	return fmt.Sprintf("man %s | %s", utils.ShellQuote(manName), pagerCmd)
 }
 
 func openManpage(entry string, cfg *Config, globalCfg *config.Config) error {
@@ -174,17 +195,7 @@ func openManpage(entry string, cfg *Config, globalCfg *config.Config) error {
 		return fmt.Errorf("no terminal emulator found")
 	}
 
-	// Build pager command with -p flag for nvimpager (force pager mode)
-	pagerCmd := pager
-	if strings.Contains(pager, "nvimpager") {
-		pagerCmd = pager + " -p"
-	}
-
-	// The page name comes from `man -k` output — third-party packages get a
-	// say in it, so it goes into the shell quoted, not interpolated raw.
-	// The pager stays unquoted on purpose: it is the user's own config and
-	// may legitimately carry flags ("nvimpager -p").
-	script := fmt.Sprintf("man %q | %s", manName, pagerCmd)
+	script := manScript(manName, pager)
 	cmd := exec.Command(terminal, append(utils.TerminalArgs(terminal), "-e", "sh", "-c", script)...)
 	cmd.Env = os.Environ()
 
