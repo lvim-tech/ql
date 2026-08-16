@@ -131,6 +131,61 @@ func FileExists(path string) bool {
 }
 
 // ============================================================================
+// Runtime State
+// ============================================================================
+
+// RuntimeDir returns the per-user directory for ql's runtime state, creating
+// it if needed.
+//
+// Modules used to keep their state at fixed names in /tmp
+// (/tmp/ql_videorecord.pid and friends). /tmp is world-writable, so any other
+// user could pre-create those paths as symlinks and have ql clobber the target
+// on its own behalf — and, worse, plant a PID that ql would then read back and
+// signal. XDG_RUNTIME_DIR is per-user and mode 0700, which removes both.
+//
+// The fallback is a 0700 directory of our own under TempDir rather than a bare
+// /tmp name, so the guarantee holds even in a session that sets no
+// XDG_RUNTIME_DIR.
+func RuntimeDir() string {
+	base := os.Getenv("XDG_RUNTIME_DIR")
+	if base == "" {
+		base = filepath.Join(os.TempDir(), fmt.Sprintf("ql-%d", os.Getuid()))
+	}
+
+	dir := filepath.Join(base, "ql")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return ""
+	}
+	return dir
+}
+
+// RuntimeStatePath returns the path of a runtime state file named name.
+// Returns "" when no runtime directory could be prepared.
+func RuntimeStatePath(name string) string {
+	dir := RuntimeDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, name)
+}
+
+// ============================================================================
+// Shell Quoting
+// ============================================================================
+
+// ShellQuote wraps s so that `sh -c` sees it as one literal word.
+//
+// Go's %q is NOT a shell quote: it produces a double-quoted string, and inside
+// double quotes the shell still expands $, backticks and backslashes. A path
+// or a manpage name carrying $(...) is therefore executed. Single quotes
+// suppress
+// every expansion, and the only character that cannot appear inside them is the
+// single quote itself — closed, escaped, reopened here.
+func ShellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// ============================================================================
 // Timestamp Utilities
 // ============================================================================
 
