@@ -69,8 +69,11 @@ func Run(ctx commands.LauncherContext) commands.CommandResult {
 }
 
 func executeDirectCommand(action string, cfg *Config, notifCfg *config.NotificationConfig) commands.CommandResult {
-	label := strings.ToUpper(action[:1]) + strings.ToLower(action[1:])
-	spec, ok := powerCommands(cfg)[label]
+	// The argument is matched against the menu labels case-insensitively
+	// rather than title-cased with action[:1], which panicked with a slice
+	// bounds error on an empty argument — and `ql power ""` produces exactly
+	// that.
+	label, spec, ok := lookupPowerCommand(cfg, action)
 	if !ok {
 		return commands.CommandResult{
 			Success: false,
@@ -112,24 +115,38 @@ func showPowerMainMenu(ctx commands.LauncherContext, cfg *Config) (string, error
 	return ctx.Show(options, "Power")
 }
 
+// powerCommandSpec is what a menu label resolves to: whether the action needs
+// confirming, and the configured command that performs it.
+type powerCommandSpec struct {
+	Confirm bool
+	Command string
+}
+
 // powerCommands maps a menu label to its confirm flag and configured
 // command. One table, one arm below: the five actions differed only in
 // these two values, and five copies of the confirm dance were 125 lines of
 // the same 25.
-func powerCommands(cfg *Config) map[string]struct {
-	Confirm bool
-	Command string
-} {
-	return map[string]struct {
-		Confirm bool
-		Command string
-	}{
+func powerCommands(cfg *Config) map[string]powerCommandSpec {
+	return map[string]powerCommandSpec{
 		"Logout":    {cfg.ConfirmLogout, cfg.LogoutCommand},
 		"Suspend":   {cfg.ConfirmSuspend, cfg.SuspendCommand},
 		"Hibernate": {cfg.ConfirmHibernate, cfg.HibernateCommand},
 		"Reboot":    {cfg.ConfirmReboot, cfg.RebootCommand},
 		"Shutdown":  {cfg.ConfirmShutdown, cfg.ShutdownCommand},
 	}
+}
+
+// lookupPowerCommand finds the menu label matching action, ignoring case, and
+// returns its spec. The label is returned too because the rest of the module
+// speaks in labels ("Shutdown"), not in whatever the user typed.
+func lookupPowerCommand(cfg *Config, action string) (string, powerCommandSpec, bool) {
+	table := powerCommands(cfg)
+	for label, spec := range table {
+		if strings.EqualFold(label, action) {
+			return label, spec, true
+		}
+	}
+	return "", powerCommandSpec{}, false
 }
 
 func executePowerAction(ctx commands.LauncherContext, cfg *Config, action string) commands.CommandResult {
