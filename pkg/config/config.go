@@ -96,7 +96,10 @@ func InitUserConfig() error {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, []byte(defaultConfig), 0644); err != nil {
+	// 0600, not 0644: the config carries secret-bearing fields (the mpc
+	// password is documented right in the default file), so it must not be
+	// created world-readable.
+	if err := os.WriteFile(configPath, []byte(defaultConfig), 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
