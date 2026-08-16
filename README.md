@@ -25,7 +25,7 @@ sudo mv ql /usr/local/bin/
 
 **Required:**
 
-- Go 1.21+ (for building only)
+- Go 1.24+ (for building only — the code uses strings.SplitSeq)
 
 **Runtime (all optional — the built-in `tui` launcher needs nothing):**
 
@@ -342,8 +342,7 @@ ql --group info
 
 **Dependencies:**
 
-- **curl** - HTTP client (required)
-- Internet connection
+- Internet connection (the module uses Go's own HTTP client — no curl needed)
 
 **Features:**
 
@@ -704,8 +703,7 @@ option2 = 100
 
 **Weather not showing:**
 
-- Check curl is installed: `which curl`
-- Test manually: `curl wttr.in/Sofia`
+- Test the service manually: `curl wttr.in/Sofia`
 - Verify internet connection
 - Check location spelling
 
@@ -729,7 +727,7 @@ go install cmd/ql/main.go
 
 ## License
 
-MIT License
+BSD 3-Clause License — see [LICENSE](LICENSE)
 
 ---
 
