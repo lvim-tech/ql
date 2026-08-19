@@ -21,7 +21,7 @@ import (
 // A theme file is YAML, kept next to config.toml under themes/<name>.yaml:
 //
 //	# ~/.config/ql/themes/mytheme.yaml
-//	border: rounded
+//	border: normal
 //	icons: unicode
 //	colors:
 //	  accent: "#81a1c1"

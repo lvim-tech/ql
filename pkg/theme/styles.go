@@ -10,14 +10,18 @@ import (
 // is also what makes the rendering testable with an arbitrary palette.
 //
 // It is deliberately small: ql's built-in menu is a single filterable list, not
-// clipack's multi-pane browser, so it needs a title badge, a border, a
-// selection highlight, muted hints and pagination dots — and nothing more.
+// clipack's multi-pane browser, so it needs a top-bar chip, a border, a
+// selection highlight, key hints and pagination dots — and nothing more.
 type Styles struct {
 	Theme Theme
 	Icons Icons
 
-	// Title is the badge drawn as the list prompt: title_fg on accent, bold.
+	// Title is the app-name chip at the left of the top bar: title_fg on
+	// accent, bold — the same convention keyforge draws its name with.
 	Title lipgloss.Style
+	// Prompt is the current menu's name, drawn next to the chip like an
+	// active tab button: title_fg on accent_alt, bold.
+	Prompt lipgloss.Style
 	// Border wraps the whole list. It is the only, focused pane, so it takes
 	// the accent colour rather than the subtle one.
 	Border lipgloss.Style
@@ -29,6 +33,9 @@ type Styles struct {
 	Item lipgloss.Style
 	// Muted styles the key-hints line and secondary text.
 	Muted lipgloss.Style
+	// Key styles the "[k]" part of a footer hint in the accent colour; the
+	// label after it is drawn with Muted.
+	Key lipgloss.Style
 	// Filter styles the filter prompt and cursor, replacing bubbles' neon
 	// defaults with the theme's accent.
 	Filter lipgloss.Style
@@ -69,19 +76,29 @@ func NewStyles(theme Theme) Styles {
 		paneColor = subtle
 	}
 
+	// The prompt tab sits on accent_alt — keyforge's active-tab convention —
+	// falling back to accent so a palette that skips accent_alt still gets a
+	// painted tab rather than an invisible one.
+	promptBg := c.AccentAlt
+	if promptBg.IsZero() {
+		promptBg = c.Accent
+	}
+
 	s := Styles{
 		Theme: theme,
 		Icons: icons,
 
-		// The title is the one place a background is painted, so it needs its
-		// own foreground to stay legible on the accent colour.
+		// The chip and the prompt tab are the places a background is painted,
+		// so each needs its own foreground to stay legible on its colour.
 		Title:  bold(fg(bg(lipgloss.NewStyle(), c.Accent), c.TitleFg)).Padding(0, 1),
+		Prompt: bold(fg(bg(lipgloss.NewStyle(), promptBg), c.TitleFg)).Padding(0, 1),
 		Border: setBorderFg(pane, paneColor),
 
 		Cursor:   setFg(lipgloss.NewStyle().Bold(true), accent),
 		Selected: setFg(lipgloss.NewStyle().Bold(true), accent),
 		Item:     setFg(lipgloss.NewStyle(), text),
 		Muted:    setFg(lipgloss.NewStyle(), muted),
+		Key:      setFg(lipgloss.NewStyle().Bold(true), accent),
 
 		Filter:      setFg(lipgloss.NewStyle().Bold(true), accent),
 		Placeholder: setFg(lipgloss.NewStyle(), muted),
@@ -95,6 +112,9 @@ func NewStyles(theme Theme) Styles {
 	if c.Accent.IsZero() {
 		s.Title = s.Title.Reverse(true)
 		s.Cursor = s.Cursor.Reverse(true)
+	}
+	if promptBg.IsZero() {
+		s.Prompt = s.Prompt.Reverse(true)
 	}
 	if c.Muted.IsZero() {
 		s.Muted = s.Muted.Faint(true)
@@ -169,19 +189,19 @@ func bold(s lipgloss.Style) lipgloss.Style {
 
 // borderStyle maps a theme border name to a lipgloss border. "none" still needs
 // a value here because the caller decides whether to apply it at all.
+//
+// The unified design draws square corners only, so "rounded" — and any name it
+// does not recognise — comes out as the normal border. The variants that stay
+// distinct (thick, double) already have square corners of their own.
 func borderStyle(name string) lipgloss.Border {
 	switch name {
-	case "normal":
-		return lipgloss.NormalBorder()
 	case "thick":
 		return lipgloss.ThickBorder()
 	case "double":
 		return lipgloss.DoubleBorder()
-	case "hidden":
-		return lipgloss.HiddenBorder()
-	case "none":
+	case "hidden", "none":
 		return lipgloss.HiddenBorder()
 	default:
-		return lipgloss.RoundedBorder()
+		return lipgloss.NormalBorder()
 	}
 }
