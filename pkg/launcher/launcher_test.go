@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/lvim-tech/ql/pkg/config"
+	"github.com/lvim-tech/ql/pkg/theme"
 )
 
 // The prompt flag comes from the table, never from the config args — the
@@ -59,7 +60,8 @@ func TestAutoAlwaysResolves(t *testing.T) {
 // The TUI model: enter returns the highlighted option, escape returns
 // nothing — Show turns that into the cancel error every caller expects.
 func TestTUIModelSelectsAndCancels(t *testing.T) {
-	model := tuiModel{list: newTUIList([]string{"first", "second"}, "ql")}
+	styles := theme.DefaultStyles()
+	model := tuiModel{list: newTUIList([]string{"first", "second"}, "ql", styles), styles: styles}
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
 	next, _ = next.(tuiModel).Update(tea.KeyMsg{Type: tea.KeyDown})
 	next, _ = next.(tuiModel).Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -67,7 +69,7 @@ func TestTUIModelSelectsAndCancels(t *testing.T) {
 		t.Errorf("enter selected %q, want second", got)
 	}
 
-	model = tuiModel{list: newTUIList([]string{"first", "second"}, "ql")}
+	model = tuiModel{list: newTUIList([]string{"first", "second"}, "ql", styles), styles: styles}
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if got := next.(tuiModel).choice; got != "" {
 		t.Errorf("escape still chose %q", got)

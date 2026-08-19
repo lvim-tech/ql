@@ -28,7 +28,18 @@ type Config struct {
 	ModuleGroups      map[string]ModuleGroup    `toml:"module_groups"`
 	Launchers         map[string]LauncherConfig `toml:"launchers"`
 	Notifications     NotificationConfig        `toml:"notifications"`
+	Theme             ThemeConfig               `toml:"theme"`
 	Commands          map[string]map[string]any `toml:"commands"`
+}
+
+// ThemeConfig selects the look of the built-in TUI. Name is a built-in preset
+// ("default", "mono") or a file in ~/.config/ql/themes/<name>.yaml; the palette
+// itself lives in that YAML file, not here. Border and Icons override the
+// preset's structural knobs without touching the palette.
+type ThemeConfig struct {
+	Name   string `toml:"name"`
+	Border string `toml:"border,omitempty"`
+	Icons  string `toml:"icons,omitempty"`
 }
 
 // ModuleGroup represents a group of related modules
@@ -194,6 +205,17 @@ func mergeConfigs(defaultCfg, userCfg Config, meta toml.MetaData) Config {
 		result.Notifications.ShowInTerminal = userCfg.Notifications.ShowInTerminal
 	}
 
+	// Merge theme (structural strings only; the palette is in the theme file).
+	if userCfg.Theme.Name != "" {
+		result.Theme.Name = userCfg.Theme.Name
+	}
+	if userCfg.Theme.Border != "" {
+		result.Theme.Border = userCfg.Theme.Border
+	}
+	if userCfg.Theme.Icons != "" {
+		result.Theme.Icons = userCfg.Theme.Icons
+	}
+
 	// Merge commands
 	if result.Commands == nil {
 		result.Commands = make(map[string]map[string]any)
@@ -276,4 +298,14 @@ func (c *Config) GetLauncherConfig(name string) LauncherConfig {
 
 func (c *Config) GetNotificationConfig() NotificationConfig {
 	return c.Notifications
+}
+
+// GetTheme returns the TUI theme selection, defaulting the preset name when it
+// was left unset.
+func (c *Config) GetTheme() ThemeConfig {
+	t := c.Theme
+	if t.Name == "" {
+		t.Name = "default"
+	}
+	return t
 }

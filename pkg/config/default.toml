@@ -40,6 +40,16 @@ module_order = [
 ]
 # MODULE EXECUTION ORDER (flat menu)
 
+# THEME — the built-in Bubble Tea menu's look. `name` is a built-in preset
+# ("default", "mono") or a file in ~/.config/ql/themes/<name>.yaml. The palette
+# (nine roles: accent, accent_alt, text, muted, subtle, success, warning, error,
+# title_fg) lives in that YAML file; `border` and `icons` override structure.
+[theme]
+name = "default"        # default, mono, or a themes/<name>.yaml file
+# border = "rounded"    # rounded, normal, thick, double, hidden, none
+# icons = "unicode"     # unicode, ascii
+# THEME
+
 # NOTIFICATION
 [notifications]
 enabled = true
